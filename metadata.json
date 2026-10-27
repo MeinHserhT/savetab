@@ -1,0 +1,6 @@
+{
+  "name": "TabFlow",
+  "description": "Swiss Minimalist Save-Links-for-Later research board with defensive OpenGraph scraping, multi-lane Kanban workflow, and high-thinking synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

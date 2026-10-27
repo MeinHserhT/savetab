@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="100%" height="100%">
+  <rect width="800" height="450" fill="#121412"/>
+  <g stroke="#262b26" stroke-width="1">
+    <rect x="64" y="56" width="672" height="338" fill="none"/>
+    <line x1="64" y1="168" x2="736" y2="168"/>
+    <line x1="320" y1="56" x2="320" y2="394"/>
+  </g>
+  <path d="M 120 112 L 240 112 L 240 140 L 120 140 Z" fill="#10b981" fill-opacity="0.75"/>
+  <path d="M 360 112 L 580 112 M 360 132 L 510 132" stroke="#a7f3d0" stroke-width="3" stroke-opacity="0.5"/>
+  <rect x="360" y="210" width="320" height="120" fill="#181b18" stroke="#3f463f" stroke-width="1"/>
+  <text x="92" y="295" fill="#ecfdf5" font-family="sans-serif" font-size="24" font-weight="600">LOCAL-FIRST SOFTWARE</text>
+  <text x="92" y="322" fill="#6ee7b7" font-family="monospace" font-size="13">CRDT SYNC · INK &amp; SWITCH RESEARCH</text>
+</svg>

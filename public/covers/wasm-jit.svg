@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" width="100%" height="100%">
+  <rect width="800" height="450" fill="#141218"/>
+  <g stroke="#27232f" stroke-width="1">
+    <line x1="100" y1="0" x2="100" y2="450"/>
+    <line x1="300" y1="0" x2="300" y2="450"/>
+    <line x1="500" y1="0" x2="500" y2="450"/>
+    <line x1="700" y1="0" x2="700" y2="450"/>
+  </g>
+  <g fill="none" stroke="#f59e0b" stroke-width="1.75" stroke-opacity="0.75">
+    <rect x="140" y="88" width="120" height="72"/>
+    <rect x="340" y="88" width="120" height="72"/>
+    <rect x="540" y="88" width="120" height="72"/>
+    <path d="M 260 124 L 340 124 M 460 124 L 540 124"/>
+  </g>
+  <text x="165" y="130" fill="#fef3c7" font-family="monospace" font-size="14">AST PARSE</text>
+  <text x="368" y="130" fill="#fef3c7" font-family="monospace" font-size="14">SSA IR</text>
+  <text x="562" y="130" fill="#fef3c7" font-family="monospace" font-size="14">WASM JIT</text>
+  <text x="100" y="340" fill="#fafafa" font-family="sans-serif" font-size="25" font-weight="600">ZERO-COPY PARSING &amp; SIMD PIPELINES</text>
+  <text x="100" y="368" fill="#a1a1aa" font-family="monospace" font-size="13">SYSTEMS PERFORMANCE · L1 CACHE LOCALITY</text>
+</svg>
