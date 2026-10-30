@@ -84,3 +84,31 @@ export function getOrCreateClientUserId(): string {
   }
   return newUid;
 }
+
+export function setAuthenticatedClientUserId(firebaseUid: string): string {
+  const cleanPart = firebaseUid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  const mappedUid = `usr-${cleanPart.length >= 4 ? cleanPart : `${cleanPart}0000`}`;
+  if (typeof window !== 'undefined') {
+    document.cookie = `${USER_COOKIE_NAME}=${encodeURIComponent(mappedUid)}; path=/; max-age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
+    try {
+      window.localStorage.setItem(USER_COOKIE_NAME, mappedUid);
+    } catch {
+      // Ignore storage write restrictions
+    }
+  }
+  return mappedUid;
+}
+
+export function clearAuthenticatedClientUserId(): string {
+  const guestUid = generateAnonymousUserId();
+  if (typeof window !== 'undefined') {
+    document.cookie = `${USER_COOKIE_NAME}=${encodeURIComponent(guestUid)}; path=/; max-age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
+    try {
+      window.localStorage.setItem(USER_COOKIE_NAME, guestUid);
+    } catch {
+      // Ignore storage write restrictions
+    }
+  }
+  return guestUid;
+}
+

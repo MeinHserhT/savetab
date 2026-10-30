@@ -1,0 +1,236 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public profile metadata for an authenticated TabFlow user without PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name of the user.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Optional avatar URL of the user.",
+          "maxLength": 2048
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "photoURL", "createdAt", "updatedAt"]
+    },
+    "Folder": {
+      "title": "Folder",
+      "description": "A user-owned Tab Group column in TabFlow.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the tab group.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the tab group.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "color": {
+          "type": "string",
+          "description": "Visual badge color of the tab group.",
+          "enum": [
+            "blue",
+            "cyan",
+            "emerald",
+            "amber",
+            "orange",
+            "red",
+            "rose",
+            "purple",
+            "indigo",
+            "zinc"
+          ],
+          "maxLength": 20
+        },
+        "collapsed": {
+          "type": "boolean",
+          "description": "Whether the tab group column is collapsed."
+        },
+        "order_index": {
+          "type": "integer",
+          "description": "Zero-based display order of the tab group."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the tab group was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the tab group was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "user_id",
+        "name",
+        "color",
+        "collapsed",
+        "order_index",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "LinkItem": {
+      "title": "LinkItem",
+      "description": "A saved browser tab link item inside a user-owned Tab Group.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the link item.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user_id": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "folder_id": {
+          "type": "string",
+          "description": "Parent Folder ID that this link belongs to.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "url": {
+          "type": "string",
+          "description": "Target URL of the saved tab.",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "domain": {
+          "type": "string",
+          "description": "Extracted hostname of the URL.",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the saved tab.",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional summary or description of the tab.",
+          "maxLength": 1000
+        },
+        "image_url": {
+          "type": "string",
+          "description": "Optional cover image URL (empty string if none).",
+          "maxLength": 2048
+        },
+        "favicon": {
+          "type": "string",
+          "description": "Favicon URL of the tab.",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "status": {
+          "type": "string",
+          "description": "Reading workflow status of the link.",
+          "enum": ["UNREAD", "READING", "ARCHIVED"],
+          "maxLength": 20
+        },
+        "order_index": {
+          "type": "integer",
+          "description": "Position of the link inside its group.",
+          "minLength": 0
+        },
+        "reading_minutes": {
+          "type": "integer",
+          "description": "Estimated reading time in minutes."
+        },
+        "scrape_status": {
+          "type": "string",
+          "description": "Metadata scrape status.",
+          "enum": ["ok", "degraded", "manual"],
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the link was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the link was last updated."
+        }
+      },
+      "required": [
+        "id",
+        "user_id",
+        "folder_id",
+        "url",
+        "domain",
+        "title",
+        "description",
+        "image_url",
+        "favicon",
+        "status",
+        "order_index",
+        "reading_minutes",
+        "scrape_status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user profile metadata keyed by Firebase Auth UID."
+    },
+    "/folders/{folderId}": {
+      "schema": "Folder",
+      "description": "Stores user-created Tab Groups."
+    },
+    "/links/{linkId}": {
+      "schema": "LinkItem",
+      "description": "Stores saved tab links belonging to a user's Tab Groups."
+    }
+  }
+}

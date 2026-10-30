@@ -3,6 +3,7 @@ import {
   deleteFolderById,
   getDatabaseSnapshot,
   insertFolder,
+  reorderUserFolders,
   updateFolderById,
 } from '@/lib/db';
 import { TabGroupColor } from '@/lib/types';
@@ -54,6 +55,12 @@ export async function PUT(request: NextRequest) {
   try {
     const userId = resolveUserIdFromRequest(request);
     const body = await request.json();
+
+    if (Array.isArray(body.ordered_ids)) {
+      const folders = reorderUserFolders(body.ordered_ids, userId);
+      return attachUserCookie(NextResponse.json({ folders }), userId);
+    }
+
     const id = typeof body.id === 'string' ? body.id.trim() : '';
     if (!id) {
       return NextResponse.json(
@@ -68,6 +75,8 @@ export async function PUT(request: NextRequest) {
         color: body.color as TabGroupColor | undefined,
         collapsed:
           typeof body.collapsed === 'boolean' ? body.collapsed : undefined,
+        order_index:
+          typeof body.order_index === 'number' ? body.order_index : undefined,
       },
       userId
     );

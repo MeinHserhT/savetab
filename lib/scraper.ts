@@ -194,6 +194,335 @@ function extractYouTubePlayerTitle(html: string): string | null {
   return null;
 }
 
+export function formatVideoDuration(totalSeconds: number): string {
+  const safeSeconds = Math.max(1, Math.round(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  if (hours > 0) {
+    return `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
+  }
+  return `${minutes}:${pad2(seconds)}`;
+}
+
+export function parseIso8601DurationToSeconds(raw: string): number | null {
+  const cleaned = raw.trim().toUpperCase();
+  const match = cleaned.match(
+    /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i
+  );
+  if (!match) return null;
+  const days = match[1] ? Number(match[1]) : 0;
+  const hours = match[2] ? Number(match[2]) : 0;
+  const minutes = match[3] ? Number(match[3]) : 0;
+  const seconds = match[4] ? Number(match[4]) : 0;
+  const total = days * 86400 + hours * 3600 + minutes * 60 + Math.round(seconds);
+  return total > 0 ? total : null;
+}
+
+export function extractVideoDurationSeconds(html: string): number | null {
+  // 1. YouTube player response lengthSeconds
+  const lengthSecMatches = [
+    html.match(/"lengthSeconds"\s*:\s*"(\d+)"/i),
+    html.match(/\\"lengthSeconds\\"\s*:\s*\\"(\d+)\\"/i),
+    html.match(/"length_seconds"\s*:\s*"?(\d+)"?/i),
+  ];
+  for (const m of lengthSecMatches) {
+    if (m?.[1]) {
+      const sec = Number(m[1]);
+      if (Number.isFinite(sec) && sec > 0) return sec;
+    }
+  }
+
+  // 2. YouTube approxDurationMs
+  const approxMsMatch =
+    html.match(/"approxDurationMs"\s*:\s*"(\d+)"/i) ||
+    html.match(/\\"approxDurationMs\\"\s*:\s*\\"(\d+)\\"/i);
+  if (approxMsMatch?.[1]) {
+    const sec = Math.round(Number(approxMsMatch[1]) / 1000);
+    if (Number.isFinite(sec) && sec > 0) return sec;
+  }
+
+  // 3. OpenGraph / Schema meta duration tags
+  const rawMetaDuration = extractMetaContent(html, [
+    'og:video:duration',
+    'video:duration',
+    'duration',
+    'music:duration',
+  ]);
+  if (rawMetaDuration) {
+    if (/^\d+(\.\d+)?$/.test(rawMetaDuration.trim())) {
+      const sec = Math.round(Number(rawMetaDuration.trim()));
+      if (sec > 0) return sec;
+    }
+    const isoSec = parseIso8601DurationToSeconds(rawMetaDuration);
+    if (isoSec && isoSec > 0) return isoSec;
+  }
+
+  // 4. JSON-LD VideoObject or inline itemprop duration (ISO 8601 PT...)
+  const isoJsonMatch = html.match(/"duration"\s*:\s*"(PT[0-9HMS.]+)"/i);
+  if (isoJsonMatch?.[1]) {
+    const isoSec = parseIso8601DurationToSeconds(isoJsonMatch[1]);
+    if (isoSec && isoSec > 0) return isoSec;
+  }
+
+  return null;
+}
+
+async function fetchYouTubeInnertubePlayerDetails(
+  videoId: string,
+  timeoutMs: number
+): Promise<{ durationSeconds: number | null; title: string | null; author: string | null }> {
+  const clients = [
+    {
+      clientName: 'VISIONOS',
+      clientVersion: '0.1',
+      hl: 'en',
+      gl: 'US',
+    },
+    {
+      clientName: 'ANDROID_TESTSUITE',
+      clientVersion: '1.9',
+      hl: 'en',
+      gl: 'US',
+    },
+    {
+      clientName: 'WEB',
+      clientVersion: '2.20250201.01.00',
+      hl: 'en',
+      gl: 'US',
+    },
+  ];
+
+  for (const client of clients) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, 3500));
+      const response = await fetch(
+        'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': BROWSER_USER_AGENT,
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            videoId,
+            context: { client },
+          }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timer);
+
+      if (!response.ok) continue;
+      const data = (await response.json()) as {
+        videoDetails?: {
+          lengthSeconds?: string | number;
+          title?: string;
+          author?: string;
+        };
+        microformat?: {
+          playerMicroformatRenderer?: {
+            lengthSeconds?: string | number;
+          };
+        };
+        streamingData?: {
+          formats?: Array<{ approxDurationMs?: string }>;
+          adaptiveFormats?: Array<{ approxDurationMs?: string }>;
+        };
+      };
+
+      const rawApproxMs =
+        data?.streamingData?.formats?.[0]?.approxDurationMs ??
+        data?.streamingData?.adaptiveFormats?.[0]?.approxDurationMs;
+      const approxSec =
+        rawApproxMs !== undefined
+          ? Math.floor(Number(rawApproxMs) / 1000)
+          : NaN;
+
+      const rawLength =
+        data?.videoDetails?.lengthSeconds ??
+        data?.microformat?.playerMicroformatRenderer?.lengthSeconds;
+      const lengthSec = rawLength !== undefined ? Number(rawLength) : NaN;
+
+      // YouTube videoDetails.lengthSeconds is Math.ceil(durationMs / 1000) (+1s compared to player UI Math.floor)
+      const adjustedLengthSec =
+        Number.isFinite(lengthSec) && lengthSec > 0
+          ? lengthSec > 1
+            ? lengthSec - 1
+            : lengthSec
+          : null;
+
+      const validDuration =
+        Number.isFinite(approxSec) && approxSec > 0
+          ? approxSec
+          : adjustedLengthSec;
+      const validTitle = cleanScrapedTitle(data?.videoDetails?.title);
+      const validAuthor = data?.videoDetails?.author?.trim() || null;
+
+      if (validDuration || validTitle) {
+        return {
+          durationSeconds: validDuration,
+          title: validTitle,
+          author: validAuthor,
+        };
+      }
+    } catch {
+      // Try next Innertube client context
+    }
+  }
+
+  return { durationSeconds: null, title: null, author: null };
+}
+
+function parseDurationTimestampToSeconds(raw: string): number | null {
+  const parts = raw
+    .trim()
+    .split(':')
+    .map((part) => Number(part));
+  if (
+    parts.length < 2 ||
+    parts.length > 3 ||
+    parts.some((n) => !Number.isFinite(n) || n < 0)
+  ) {
+    return null;
+  }
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  return parts[0] * 60 + parts[1];
+}
+
+async function fetchYouTubeSearchDurationSeconds(
+  videoId: string,
+  titleHint: string | null | undefined,
+  timeoutMs: number
+): Promise<number | null> {
+  const cleanHint = titleHint?.trim() || '';
+  const queries = Array.from(
+    new Set(
+      [
+        videoId.startsWith('-') || videoId.includes('_') || videoId.includes('-')
+          ? cleanHint
+            ? `${cleanHint} "${videoId}"`
+            : `"${videoId}"`
+          : `"${videoId}"`,
+        cleanHint ? `${cleanHint} ${videoId}` : null,
+        cleanHint || null,
+        videoId,
+      ].filter((q): q is string => Boolean(q && q.trim()))
+    )
+  );
+
+  const escapedId = videoId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  for (const query of queries) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        Math.max(timeoutMs, 4500)
+      );
+      const response = await fetch(
+        'https://www.youtube.com/youtubei/v1/search?prettyPrint=false',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': BROWSER_USER_AGENT,
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+            context: {
+              client: {
+                clientName: 'WEB',
+                clientVersion: '2.20250201.01.00',
+                hl: 'en',
+                gl: 'US',
+              },
+            },
+          }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timer);
+
+      if (!response.ok) continue;
+      const text = await response.text();
+      const rendererMatch = text.match(
+        new RegExp(`"videoRenderer"\\s*:\\s*\\{"videoId"\\s*:\\s*"${escapedId}"`)
+      );
+      if (!rendererMatch || rendererMatch.index === undefined) continue;
+
+      const slice = text.slice(rendererMatch.index, rendererMatch.index + 3500);
+      const lenIdx = slice.indexOf('"lengthText":');
+      if (lenIdx === -1) continue;
+
+      const lenSlice = slice.slice(lenIdx, lenIdx + 350);
+      const simpleMatch = lenSlice.match(/"simpleText"\s*:\s*"([0-9:]+)"/);
+      if (simpleMatch?.[1]) {
+        const rawSec = parseDurationTimestampToSeconds(simpleMatch[1]);
+        if (rawSec && rawSec > 0) {
+          // YouTube search videoRenderer.lengthText rounds fractional seconds up by +1s compared to player bar
+          return rawSec > 1 ? rawSec - 1 : rawSec;
+        }
+      }
+    } catch {
+      // Try next search query
+    }
+  }
+
+  return null;
+}
+
+async function fetchYouTubeWatchHtmlDurationSeconds(
+  videoId: string,
+  timeoutMs: number
+): Promise<number | null> {
+  const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
+  const userAgents = [
+    'Twitterbot/1.0',
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    BROWSER_USER_AGENT,
+  ];
+
+  for (const ua of userAgents) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        Math.max(timeoutMs, 5500)
+      );
+      const response = await fetch(watchUrl, {
+        method: 'GET',
+        headers: {
+          'User-Agent': ua,
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+417',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (response.ok) {
+        const html = await response.text();
+        const durationSec = extractVideoDurationSeconds(html);
+        if (durationSec && durationSec > 0) {
+          return durationSec > 1 ? durationSec - 1 : durationSec;
+        }
+      }
+    } catch {
+      // Try next User-Agent
+    }
+  }
+  return null;
+}
+
 export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata {
   const parsedUrl = validateAndNormalizeUrl(rawUrl);
   const domain = parsedUrl.hostname.replace(/^www\./i, '');
@@ -229,7 +558,15 @@ export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata
     ogDescription ||
     `Saved technical reference from ${domain}${parsedUrl.pathname !== '/' ? ` (${parsedUrl.pathname})` : ''}. Metadata synthesized via defensive fallback.`;
 
-  const reading_minutes = estimateReadingMinutes(html, description);
+  const durationSeconds = extractVideoDurationSeconds(html);
+  const video_duration =
+    durationSeconds && durationSeconds > 0
+      ? formatVideoDuration(durationSeconds)
+      : null;
+  const reading_minutes =
+    durationSeconds && durationSeconds > 0
+      ? Math.max(1, Math.round(durationSeconds / 60))
+      : estimateReadingMinutes(html, description);
   const scrape_status = hasValidTitle && Boolean(ogDescription || fallbackTagTitle || ytPlayerTitle) ? 'ok' : 'degraded';
 
   return {
@@ -240,6 +577,7 @@ export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata
     image_url: resolvedImage,
     favicon,
     reading_minutes,
+    video_duration,
     scrape_status,
     diagnostics:
       scrape_status === 'ok'
@@ -296,6 +634,7 @@ async function fetchYouTubeOEmbedMetadata(
           payload.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
         favicon: 'https://www.youtube.com/favicon.ico',
         reading_minutes: 5,
+        video_duration: null,
         scrape_status: 'ok',
         diagnostics: 'YouTube video title and thumbnail resolved via oEmbed API.',
       };
@@ -316,9 +655,62 @@ export async function scrapeUrlMetadata(
   const ytVideoId = extractYouTubeVideoId(parsedUrl);
 
   if (ytVideoId) {
-    const oembedMeta = await fetchYouTubeOEmbedMetadata(parsedUrl, ytVideoId, timeoutMs);
+    const [oembedMeta, innertube] = await Promise.all([
+      fetchYouTubeOEmbedMetadata(parsedUrl, ytVideoId, timeoutMs),
+      fetchYouTubeInnertubePlayerDetails(ytVideoId, timeoutMs),
+    ]);
+
+    let resolvedDurationSec =
+      innertube.durationSeconds && innertube.durationSeconds > 0
+        ? innertube.durationSeconds
+        : null;
+
+    if (!resolvedDurationSec) {
+      resolvedDurationSec = await fetchYouTubeSearchDurationSeconds(
+        ytVideoId,
+        oembedMeta?.title || innertube.title,
+        timeoutMs
+      );
+    }
+
+    if (!resolvedDurationSec) {
+      resolvedDurationSec = await fetchYouTubeWatchHtmlDurationSeconds(
+        ytVideoId,
+        timeoutMs
+      );
+    }
+
     if (oembedMeta) {
+      if (resolvedDurationSec) {
+        oembedMeta.video_duration = formatVideoDuration(resolvedDurationSec);
+        oembedMeta.reading_minutes = Math.max(
+          1,
+          Math.round(resolvedDurationSec / 60)
+        );
+      }
       return oembedMeta;
+    }
+
+    if (innertube.title || resolvedDurationSec) {
+      const canonicalWatchUrl = `https://www.youtube.com/watch?v=${ytVideoId}`;
+      return {
+        url: parsedUrl.toString(),
+        domain,
+        title: innertube.title || humanizeFallbackTitle(parsedUrl),
+        description: innertube.author
+          ? `YouTube video by ${innertube.author} (${canonicalWatchUrl}).`
+          : `YouTube video clip (${canonicalWatchUrl}).`,
+        image_url: `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg`,
+        favicon: 'https://www.youtube.com/favicon.ico',
+        reading_minutes: resolvedDurationSec
+          ? Math.max(1, Math.round(resolvedDurationSec / 60))
+          : 5,
+        video_duration: resolvedDurationSec
+          ? formatVideoDuration(resolvedDurationSec)
+          : null,
+        scrape_status: 'ok',
+        diagnostics: 'YouTube video metadata and duration resolved via Innertube player API.',
+      };
     }
   }
 
@@ -347,6 +739,7 @@ export async function scrapeUrlMetadata(
         image_url: ytVideoId ? `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg` : null,
         favicon: ytVideoId ? 'https://www.youtube.com/favicon.ico' : `${parsedUrl.origin}/favicon.ico`,
         reading_minutes: 5,
+        video_duration: null,
         scrape_status: 'degraded',
         diagnostics: `HTTP ${response.status} response from origin; degraded gracefully.`,
       };
@@ -364,6 +757,7 @@ export async function scrapeUrlMetadata(
       image_url: ytVideoId ? `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg` : null,
       favicon: ytVideoId ? 'https://www.youtube.com/favicon.ico' : `${parsedUrl.origin}/favicon.ico`,
       reading_minutes: 5,
+      video_duration: null,
       scrape_status: 'degraded',
       diagnostics: `Scraper fallback triggered: ${reason}`,
     };

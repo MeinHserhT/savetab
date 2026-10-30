@@ -7,11 +7,13 @@ export enum LinkStatus {
 export type TabGroupColor =
   | 'blue'
   | 'cyan'
-  | 'amber'
   | 'emerald'
+  | 'amber'
+  | 'orange'
+  | 'red'
   | 'rose'
   | 'purple'
-  | 'orange'
+  | 'indigo'
   | 'zinc';
 
 export interface User {
@@ -44,6 +46,7 @@ export interface LinkItem {
   status: LinkStatus;
   order_index: number;
   reading_minutes: number;
+  video_duration?: string | null;
   tags: string[];
   scrape_status: 'ok' | 'degraded' | 'manual';
   created_at: string;
@@ -58,22 +61,7 @@ export interface ScrapedMetadata {
   image_url: string | null;
   favicon: string;
   reading_minutes: number;
+  video_duration?: string | null;
   scrape_status: 'ok' | 'degraded';
   diagnostics?: string;
-}
-
-export interface SynthesisResult {
-  summary: string;
-  thematicClusters: {
-    theme: string;
-    rationale: string;
-    relatedTitles: string[];
-  }[];
-  readingSequence: {
-    step: number;
-    title: string;
-    whyFirst: string;
-  }[];
-  keyTakeaways: string[];
-  modelUsed: string;
 }

@@ -23,7 +23,8 @@ export async function GET(request: NextRequest) {
       return (
         isGenericPlaceholderTitle(link.title) ||
         (isYt &&
-          (link.title.toLowerCase().startsWith('watch ') ||
+          (!link.video_duration ||
+            link.title.toLowerCase().startsWith('watch ') ||
             link.title.startsWith('YouTube Clip (')))
       );
     } catch {
@@ -35,13 +36,19 @@ export async function GET(request: NextRequest) {
     await Promise.all(
       needsRepair.map(async (item) => {
         const refreshed = await scrapeUrlMetadata(item.url);
-        if (refreshed.title && !isGenericPlaceholderTitle(refreshed.title)) {
+        const shouldUpdateTitle =
+          refreshed.title && !isGenericPlaceholderTitle(refreshed.title);
+        if (shouldUpdateTitle || refreshed.video_duration) {
           updateLinkById(
             item.id,
             {
-              title: refreshed.title,
-              description: refreshed.description,
-              image_url: refreshed.image_url,
+              title: shouldUpdateTitle ? refreshed.title : item.title,
+              description: shouldUpdateTitle
+                ? refreshed.description
+                : item.description,
+              image_url: refreshed.image_url || item.image_url,
+              reading_minutes: refreshed.reading_minutes,
+              video_duration: refreshed.video_duration ?? item.video_duration,
             },
             userId
           );
@@ -123,6 +130,7 @@ export async function POST(request: NextRequest) {
       folder_id: folderId,
       tags: tags.length > 0 ? tags : ['reference'],
       reading_minutes: scraped.reading_minutes,
+      video_duration: scraped.video_duration ?? null,
       scrape_status: scraped.scrape_status,
       status,
     });
@@ -132,6 +140,7 @@ export async function POST(request: NextRequest) {
       {
         link: created,
         links: snapshot.links,
+        folders: snapshot.folders,
         scrapeDiagnostics: scraped.diagnostics,
       },
       { status: 201 }

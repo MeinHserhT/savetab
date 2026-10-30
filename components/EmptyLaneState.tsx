@@ -3,7 +3,9 @@
 import React, { useState } from 'react';
 import { Check, ClipboardPaste, Globe, Loader2, Plus, X } from 'lucide-react';
 import { Folder, TabGroupColor } from '@/lib/types';
-import { TAB_GROUP_STYLES } from '@/components/KanbanBoard';
+import { getTabGroupStyles } from '@/components/KanbanBoard';
+import { useThemeStore } from '@/store/useThemeStore';
+import { useLanguageStore } from '@/store/useLanguageStore';
 
 interface EmptyLaneStateProps {
   group: Folder;
@@ -23,8 +25,11 @@ export function EmptyLaneState({
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
+  const { mode } = useThemeStore();
+  const { t } = useLanguageStore();
+  const groupStyles = getTabGroupStyles(mode);
   const colorKey: TabGroupColor = group.color ?? 'blue';
-  const style = TAB_GROUP_STYLES[colorKey] ?? TAB_GROUP_STYLES.blue;
+  const style = groupStyles[colorKey] ?? groupStyles.blue;
 
   const isLikelyUrl = (text: string) => {
     const trimmed = text.trim();
@@ -56,7 +61,7 @@ export function EmptyLaneState({
     e.preventDefault();
     const candidate = inlineUrl.trim();
     if (!candidate) {
-      setFeedbackError('Enter or paste a valid URL.');
+      setFeedbackError(t.emptyLane.errEmptyUrl);
       return;
     }
     setFeedbackError(null);
@@ -67,7 +72,7 @@ export function EmptyLaneState({
       setInlineUrl('');
       setShowInlineInput(false);
     } else {
-      setFeedbackError('Could not save URL. Check the domain format.');
+      setFeedbackError(t.emptyLane.errSaveFailed);
     }
   };
 
@@ -77,7 +82,7 @@ export function EmptyLaneState({
       className={`rounded-md border border-dashed transition-colors p-3 space-y-2.5 ${
         isDragOver
           ? `${style.badgeBg} border-current`
-          : 'border-zinc-800/90 bg-zinc-950/60 hover:border-zinc-700/90'
+          : 'border-[var(--tf-border)] bg-[var(--tf-card)] hover:border-[var(--tf-border-strong)]'
       }`}
     >
       {/* Compact Browser-Tab Geometry Row with Group-Colored Accent Icon */}
@@ -89,11 +94,11 @@ export function EmptyLaneState({
         </span>
 
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-zinc-200 truncate">
-            No links in {group.name}
+          <p className="text-xs font-medium text-[var(--tf-text)] truncate">
+            {t.emptyLane.noLinksIn(group.name)}
           </p>
-          <p className="text-[11px] text-zinc-500 truncate">
-            Add a new link or drag a tab into this group
+          <p className="text-[11px] text-[var(--tf-text-muted)] truncate">
+            {t.emptyLane.subtext}
           </p>
         </div>
       </div>
@@ -104,26 +109,26 @@ export function EmptyLaneState({
           type="button"
           disabled={isSaving}
           onClick={handleClipboardPaste}
-          aria-label={`Paste URL into ${group.name}`}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500"
+          aria-label={t.emptyLane.pasteUrlAria(group.name)}
+          className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] bg-[var(--tf-surface)] hover:bg-[var(--tf-elevated)] border border-[var(--tf-border)] rounded transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--tf-accent)]"
         >
           {isSaving ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
-            <ClipboardPaste className="w-3 h-3 text-zinc-400" />
+            <ClipboardPaste className="w-3 h-3 text-[var(--tf-text-muted)]" />
           )}
-          <span>Paste URL</span>
+          <span>{t.emptyLane.pasteUrl}</span>
         </button>
 
         <button
           type="button"
           disabled={isSaving}
           onClick={() => onAddViaModal(group.id)}
-          aria-label={`Add new link to ${group.name}`}
-          className={`flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold border rounded transition-opacity hover:opacity-90 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sky-500 ${style.badgeBg} ${style.badgeText}`}
+          aria-label={t.emptyLane.addLinkAria(group.name)}
+          className={`flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold border rounded transition-opacity hover:opacity-90 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--tf-accent)] ${style.badgeBg} ${style.badgeText}`}
         >
           <Plus className="w-3 h-3" />
-          <span>Add Link</span>
+          <span>{t.emptyLane.addLink}</span>
         </button>
       </div>
 
@@ -131,29 +136,29 @@ export function EmptyLaneState({
       {showInlineInput && (
         <form
           onSubmit={handleInlineSubmit}
-          className="pt-2 border-t border-zinc-800/80 flex items-center gap-1.5"
+          className="pt-2 border-t border-[var(--tf-border)] flex items-center gap-1.5"
         >
           <input
             type="text"
             value={inlineUrl}
             onChange={(e) => setInlineUrl(e.target.value)}
-            aria-label={`Quick URL input for ${group.name}`}
-            placeholder="https://example.com/article..."
+            aria-label={t.emptyLane.quickInputAria(group.name)}
+            placeholder={t.emptyLane.quickInputPlaceholder}
             autoFocus
-            className="flex-1 min-w-0 px-2.5 py-1 text-xs bg-zinc-900 border border-zinc-800 rounded text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-500"
+            className="flex-1 min-w-0 px-2.5 py-1 text-xs bg-[var(--tf-surface)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
           />
           <button
             type="submit"
             disabled={isSaving}
-            aria-label={`Save quick link to ${group.name}`}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-zinc-100 hover:bg-white text-zinc-950 rounded transition-colors whitespace-nowrap shrink-0"
+            aria-label={t.emptyLane.saveQuickAria(group.name)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-[var(--tf-text)] hover:opacity-90 text-[var(--tf-canvas)] rounded transition-opacity whitespace-nowrap shrink-0"
           >
             {isSaving ? (
               <Loader2 className="w-3 h-3 animate-spin" />
             ) : (
               <Check className="w-3 h-3" />
             )}
-            <span>Save</span>
+            <span>{t.emptyLane.save}</span>
           </button>
           <button
             type="button"
@@ -161,8 +166,8 @@ export function EmptyLaneState({
               setShowInlineInput(false);
               setFeedbackError(null);
             }}
-            aria-label="Cancel quick paste"
-            className="p-1 text-zinc-500 hover:text-zinc-300 rounded hover:bg-zinc-900"
+            aria-label={t.emptyLane.cancelQuickAria}
+            className="p-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] rounded hover:bg-[var(--tf-surface)]"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -170,7 +175,7 @@ export function EmptyLaneState({
       )}
 
       {feedbackError && (
-        <p role="alert" className="text-[11px] text-rose-400">
+        <p role="alert" className="text-[11px] text-rose-500">
           {feedbackError}
         </p>
       )}

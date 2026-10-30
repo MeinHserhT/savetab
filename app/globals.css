@@ -1,27 +1,162 @@
 @import "tailwindcss";
 
-@layer base {
-  :root {
-    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-  }
-
-  body {
-    font-family: var(--font-sans);
-    background-color: #09090b;
-    color: #f4f4f5;
-    letter-spacing: 0.005em;
-    -webkit-font-smoothing: antialiased;
-  }
-
-  h1, h2, h3, h4 {
-    font-family: var(--font-display);
-    text-wrap: balance;
-  }
-
-  code, pre, .font-mono {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-  }
+:root,
+[data-theme="dark"] {
+  /*
+   * Dark Theme — Black, Grey, and Bluish-White Palette:
+   * - Obsidian Black Canvas:      #090A0D
+   * - Charcoal & Slate Greys:     #12141A / #1B1E26 / #262A34 / #9BA3B2
+   * - Bluish-White Text & Accent: #F0F7FF / #D8ECFF
+   */
+  --tf-canvas: #090a0d;
+  --tf-surface: #12141a;
+  --tf-elevated: #1b1e26;
+  --tf-card: #0d0f14;
+  --tf-card-hover: #171a22;
+  --tf-border: #262a34;
+  --tf-border-strong: #b8dcff;
+  --tf-text: #f0f7ff;
+  --tf-text-secondary: #9ba3b2;
+  --tf-text-muted: #687080;
+  --tf-accent: #d8ecff;
+  --tf-accent-soft: rgba(216, 236, 255, 0.14);
+  --tf-accent-text: #f0f7ff;
+  --tf-highlight: #b8dcff;
+  --tf-highlight-soft: rgba(184, 220, 255, 0.12);
+  --tf-highlight-text: #f0f7ff;
 }
+
+[data-theme="light"] {
+  /*
+   * Light Theme — Exact 4-Color Palette:
+   * - #FFFAFF (Snow White Canvas & Cards)
+   * - #0A2463 (Royal Oxford Navy Text & Primary Structure)
+   * - #3E92CC (Celestial Blue Primary Accent)
+   * - #D8315B (Cerise Crimson Highlight Accent)
+   */
+  --tf-canvas: #fffaff;
+  --tf-surface: #f4f7fc;
+  --tf-elevated: #fffaff;
+  --tf-card: #fffaff;
+  --tf-card-hover: #eef4fb;
+  --tf-border: #d0dfef;
+  --tf-border-strong: #3e92cc;
+  --tf-text: #0a2463;
+  --tf-text-secondary: #284b8c;
+  --tf-text-muted: #5676ad;
+  --tf-accent: #3e92cc;
+  --tf-accent-soft: rgba(62, 146, 204, 0.14);
+  --tf-accent-text: #0a2463;
+  --tf-highlight: #d8315b;
+  --tf-highlight-soft: rgba(216, 49, 91, 0.12);
+  --tf-highlight-text: #d8315b;
+}
+
+body {
+  background-color: var(--tf-canvas);
+  color: var(--tf-text);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--tf-canvas);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--tf-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--tf-border-strong);
+}
+
+/* Light/Dark Toggle Switch (Uiverse.io by zenonaiden_3341) */
+.toggleSwitch {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  border-radius: 50%;
+  position: relative;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  line-height: 1;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#checkboxInput {
+  display: none;
+}
+
+.icon {
+  grid-column: 1 / 1;
+  grid-row: 1 / 1;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  z-index: 2;
+  transform-origin: center center;
+  transition:
+    transform 500ms ease,
+    opacity 300ms ease;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.icon--moon {
+  color: #212121;
+  background-color: #e8e8e8;
+  border-radius: 50%;
+}
+
+.icon--sun {
+  color: #e8e8e8;
+  background-color: #212121;
+  border-radius: 50%;
+}
+
+.icon--moon,
+.icon--sun {
+  transform: rotate(0deg) scale(0);
+  opacity: 0;
+}
+
+#checkboxInput:not(:checked) + .toggleSwitch .icon--sun {
+  transform: rotate(360deg) scale(1);
+  opacity: 1;
+}
+
+#checkboxInput:not(:checked) + .toggleSwitch .icon--moon {
+  transform: rotate(0deg) scale(0);
+  opacity: 0;
+}
+
+#checkboxInput:checked + .toggleSwitch .icon--moon {
+  transform: rotate(360deg) scale(1);
+  opacity: 1;
+}
+
+#checkboxInput:checked + .toggleSwitch .icon--sun {
+  transform: rotate(0deg) scale(0);
+  opacity: 0;
+}
+
+#checkboxInput:active + .toggleSwitch {
+  transform: scale(0.94);
+}
+
+.icon svg {
+  fill: currentColor !important;
+}
+

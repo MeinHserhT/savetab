@@ -3,26 +3,15 @@
 import React, { useEffect, useState } from 'react';
 import { Link2, Loader2, Upload, X } from 'lucide-react';
 import { useLinkStore } from '@/store/useLinkStore';
+import { useLanguageStore } from '@/store/useLanguageStore';
 import { LinkStatus } from '@/lib/types';
+import { parseTabGroupFromDataTransfer } from '@/lib/tab-group-drop';
 
 interface AddLinkModalProps {
   isOpen: boolean;
   defaultStatus?: LinkStatus;
   defaultFolderId?: string | null;
   onClose: () => void;
-}
-
-function extractDroppedUrl(dataTransfer: DataTransfer): string {
-  const uriList = dataTransfer.getData('text/uri-list');
-  if (uriList) {
-    const firstValidLine = uriList
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line && !line.startsWith('#'));
-    if (firstValidLine) return firstValidLine;
-  }
-  const plainText = dataTransfer.getData('text/plain');
-  return plainText ? plainText.trim().split(/\s+/)[0] : '';
 }
 
 export function AddLinkModal({
@@ -32,6 +21,7 @@ export function AddLinkModal({
   onClose,
 }: AddLinkModalProps) {
   const { folders, activeFolderId, addLink, isScraping } = useLinkStore();
+  const { t } = useLanguageStore();
 
   const [url, setUrl] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -62,7 +52,7 @@ export function AddLinkModal({
   const saveUrl = async (rawUrl: string) => {
     const trimmed = rawUrl.trim();
     if (!trimmed) {
-      setValidationError('Please enter or drop a valid URL.');
+      setValidationError(t.addModal.errEmptyUrl);
       return;
     }
 
@@ -90,9 +80,10 @@ export function AddLinkModal({
     e.stopPropagation();
     setIsDragOver(false);
 
-    const droppedUrl = extractDroppedUrl(e.dataTransfer);
+    const droppedUrl =
+      parseTabGroupFromDataTransfer(e.dataTransfer).tabs[0]?.url ?? '';
     if (!droppedUrl) {
-      setValidationError('Could not read a valid URL from the dropped item.');
+      setValidationError(t.addModal.errInvalidDrop);
       return;
     }
     setUrl(droppedUrl);
@@ -107,22 +98,22 @@ export function AddLinkModal({
       onClick={(e) => {
         if (e.target === e.currentTarget && !isScraping) onClose();
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
     >
-      <div className="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-zinc-800/90 flex items-center justify-between">
+      <div className="w-full max-w-md rounded-lg border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] text-[var(--tf-text)] shadow-2xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-[var(--tf-border)] flex items-center justify-between">
           <h2
             id="add-link-modal-title"
-            className="text-sm font-semibold text-zinc-100 flex items-center gap-2"
+            className="text-sm font-semibold text-[var(--tf-text)] flex items-center gap-2"
           >
-            <Link2 className="w-4 h-4 text-sky-400" />
-            <span>Add Link</span>
+            <Link2 className="w-4 h-4 text-[var(--tf-accent)]" />
+            <span>{t.addModal.title}</span>
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close modal"
-            className="p-1 text-zinc-400 hover:text-zinc-100 rounded-md hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            aria-label={t.addModal.closeAria}
+            className="p-1 text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] rounded-md hover:bg-[var(--tf-surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--tf-accent)]"
           >
             <X className="w-4 h-4" />
           </button>
@@ -145,8 +136,8 @@ export function AddLinkModal({
           <div
             className={`rounded-md border border-dashed p-3 transition-colors ${
               isDragOver
-                ? 'border-sky-400 bg-sky-950/25'
-                : 'border-zinc-800 bg-zinc-900/40'
+                ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
+                : 'border-[var(--tf-border)] bg-[var(--tf-surface)]'
             }`}
           >
             <div className="flex items-center gap-2">
@@ -154,36 +145,35 @@ export function AddLinkModal({
                 id="save-link-url"
                 type="text"
                 autoFocus
+                maxLength={2048}
                 value={url}
                 onChange={(e) => {
-                  setUrl(e.target.value);
+                  setUrl(e.target.value.slice(0, 2048));
                   if (validationError) setValidationError(null);
                 }}
-                placeholder="Paste or drag & drop URL here..."
-                className="flex-1 px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-md text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-500"
+                placeholder={t.addModal.urlPlaceholder}
+                className="flex-1 px-3 py-2 text-xs bg-[var(--tf-canvas)] border border-[var(--tf-border)] rounded-md text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
               />
               <button
                 type="submit"
                 disabled={isScraping}
-                className="px-3.5 py-2 text-xs font-medium text-zinc-950 bg-zinc-100 hover:bg-white rounded-md transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                className="px-3.5 py-2 text-xs font-medium text-[var(--tf-canvas)] bg-[var(--tf-text)] hover:opacity-90 rounded-md transition-opacity inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
                 {isScraping && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Save</span>
+                <span>{t.addModal.save}</span>
               </button>
             </div>
 
-            <p className="mt-2 text-[11px] text-zinc-400 flex items-center justify-center gap-1.5 select-none">
-              <Upload className="w-3 h-3 text-sky-400 shrink-0" />
+            <p className="mt-2 text-[11px] text-[var(--tf-text-secondary)] flex items-center justify-center gap-1.5 select-none">
+              <Upload className="w-3 h-3 text-[var(--tf-accent)] shrink-0" />
               <span>
-                {isDragOver
-                  ? 'Drop URL now to save immediately'
-                  : 'Drag & drop any link into this box or press Enter'}
+                {isDragOver ? t.addModal.dropActiveHint : t.addModal.dropIdleHint}
               </span>
             </p>
           </div>
 
           {validationError && (
-            <p role="alert" className="text-xs text-rose-400">
+            <p role="alert" className="text-xs text-rose-500">
               {validationError}
             </p>
           )}

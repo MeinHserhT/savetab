@@ -24,17 +24,27 @@ export const metadata: Metadata = {
   title: 'TabFlow — Swiss Minimalist Link Curation & Research Board',
   description:
     'Swiss Minimalist Save-Links-for-Later research board with defensive OpenGraph scraping, multi-lane Kanban workflow, and high-thinking synthesis.',
+  icons: {
+    icon: [
+      { url: '/assets/aistudio/UxYOWWa01.svg', type: 'image/svg+xml' },
+      { url: '/assets/aistudio/logo-mark.png', type: 'image/png' },
+    ],
+    shortcut: '/assets/aistudio/logo-mark.png',
+    apple: '/assets/aistudio/logo-mark.png',
+  },
   openGraph: {
     title: 'TabFlow — Swiss Minimalist Link Curation & Research Board',
     description:
       'Swiss Minimalist Save-Links-for-Later research board with defensive OpenGraph scraping, multi-lane Kanban workflow, and high-thinking synthesis.',
     type: 'website',
+    images: ['/assets/aistudio/logo-mark.png'],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'TabFlow — Swiss Minimalist Link Curation & Research Board',
     description:
       'Swiss Minimalist Save-Links-for-Later research board with defensive OpenGraph scraping, multi-lane Kanban workflow, and high-thinking synthesis.',
+    images: ['/assets/aistudio/logo-mark.png'],
   },
 };
 
@@ -48,7 +58,10 @@ export default function RootLayout({
       lang="en"
       className={`dark ${plusJakarta.variable} ${dmSans.variable} ${jetbrainsMono.variable}`}
     >
-      <body suppressHydrationWarning className="min-h-screen bg-zinc-950 text-zinc-100">
+      <body
+        suppressHydrationWarning
+        className="min-h-screen bg-[var(--tf-canvas)] text-[var(--tf-text)]"
+      >
         {children}
       </body>
     </html>

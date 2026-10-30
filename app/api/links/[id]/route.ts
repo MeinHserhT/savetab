@@ -26,6 +26,7 @@ export async function PUT(
         tags: Array.isArray(body.tags) ? body.tags : undefined,
         image_url: body.image_url,
         reading_minutes: body.reading_minutes,
+        video_duration: body.video_duration,
       },
       userId
     );

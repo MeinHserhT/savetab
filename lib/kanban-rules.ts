@@ -121,20 +121,57 @@ export function filterLinks(
   });
 }
 
-export function computeLaneMetrics(links: LinkItem[]) {
-  const unread = links.filter((l) => l.status === LinkStatus.UNREAD);
-  const reading = links.filter((l) => l.status === LinkStatus.READING);
-  const archived = links.filter((l) => l.status === LinkStatus.ARCHIVED);
+const LEGACY_MOCK_LINK_URLS = new Set([
+  'https://grid-systems.ch/essays/muller-brockmann-modular-proportions',
+  'https://raft.github.io/papers/raft-extended-linearizability.pdf',
+  'https://inkandswitch.com/local-first/crdt-automerge-sync',
+  'https://v8.dev/blog/liftoff-wasm-baseline-simd-pipeline',
+  'https://w3c.github.io/design-tokens/format-specification',
+  'https://arxiv.org/abs/2312.11805',
+]);
 
-  const totalMinutes = [...unread, ...reading].reduce(
-    (sum, item) => sum + (item.reading_minutes || 0),
-    0
-  );
+const LEGACY_SEED_FOLDER_NAMES = new Set([
+  'Distributed Systems',
+  'Compilers & Runtime',
+  'UI & Design Systems',
+  'Reading Later',
+  'AI Research',
+  'Alpha Private Group',
+]);
 
-  return {
-    unreadCount: unread.length,
-    readingCount: reading.length,
-    archivedCount: archived.length,
-    activeReadingMinutes: totalMinutes,
-  };
+export function isLegacyMockLink(link: {
+  id?: unknown;
+  url?: unknown;
+  image_url?: unknown;
+  favicon?: unknown;
+}): boolean {
+  const url = typeof link.url === 'string' ? link.url.trim() : '';
+  if (LEGACY_MOCK_LINK_URLS.has(url)) return true;
+  if (
+    typeof link.image_url === 'string' &&
+    link.image_url.startsWith('/covers/')
+  ) {
+    return true;
+  }
+  if (typeof link.favicon === 'string' && link.favicon.startsWith('/covers/')) {
+    return true;
+  }
+  return typeof link.id === 'string' && /^lnk-0[1-5](-|$)/.test(link.id);
+}
+
+export function isLegacySeedFolder(folder: {
+  id?: unknown;
+  name?: unknown;
+}): boolean {
+  const id = typeof folder.id === 'string' ? folder.id.trim() : '';
+  const name = typeof folder.name === 'string' ? folder.name.trim() : '';
+  if (
+    id.startsWith('fld-dist') ||
+    id.startsWith('fld-compilers') ||
+    id.startsWith('fld-swiss') ||
+    id.startsWith('fld-eng')
+  ) {
+    return true;
+  }
+  return LEGACY_SEED_FOLDER_NAMES.has(name);
 }

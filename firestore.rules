@@ -1,0 +1,232 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'anonymous'
+      );
+    }
+
+    // 3. Validation Blueprints (Anti-Update-Gap)
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'photoURL', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        data.photoURL is string && data.photoURL.size() >= 0 && data.photoURL.size() <= 2048 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFolder(data) {
+      return data.keys().hasAll(['id', 'user_id', 'name', 'color', 'collapsed', 'order_index', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'user_id', 'name', 'color', 'collapsed', 'order_index', 'createdAt', 'updatedAt']) &&
+        isValidId(data.id) &&
+        isValidId(data.user_id) &&
+        data.user_id == request.auth.uid &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
+        data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
+        data.color in ['blue', 'cyan', 'emerald', 'amber', 'orange', 'red', 'rose', 'purple', 'indigo', 'zinc'] &&
+        data.collapsed is bool &&
+        data.order_index is int && data.order_index >= 0 && data.order_index <= 10000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLinkItem(data) {
+      return data.keys().hasAll([
+          'id',
+          'user_id',
+          'folder_id',
+          'url',
+          'domain',
+          'title',
+          'description',
+          'image_url',
+          'favicon',
+          'status',
+          'order_index',
+          'reading_minutes',
+          'scrape_status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'user_id',
+          'folder_id',
+          'url',
+          'domain',
+          'title',
+          'description',
+          'image_url',
+          'favicon',
+          'status',
+          'order_index',
+          'reading_minutes',
+          'scrape_status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        isValidId(data.id) &&
+        isValidId(data.user_id) &&
+        data.user_id == request.auth.uid &&
+        isValidId(data.folder_id) &&
+        data.url is string && data.url.size() >= 1 && data.url.size() <= 2048 &&
+        data.domain is string && data.domain.size() >= 1 && data.domain.size() <= 255 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+        data.description is string && data.description.size() >= 0 && data.description.size() <= 1000 &&
+        data.image_url is string && data.image_url.size() >= 0 && data.image_url.size() <= 2048 &&
+        data.favicon is string && data.favicon.size() >= 1 && data.favicon.size() <= 2048 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 20 &&
+        data.status in ['UNREAD', 'READING', 'ARCHIVED'] &&
+        data.order_index is int && data.order_index >= 0 && data.order_index <= 10000 &&
+        data.reading_minutes is int && data.reading_minutes >= 1 && data.reading_minutes <= 1000 &&
+        data.scrape_status is string && data.scrape_status.size() >= 1 && data.scrape_status.size() <= 20 &&
+        data.scrape_status in ['ok', 'degraded', 'manual'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isParentFolderOwnedByCaller(folderId) {
+      return exists(/databases/$(database)/documents/folders/$(folderId)) &&
+        get(/databases/$(database)/documents/folders/$(folderId)).data.user_id == request.auth.uid;
+    }
+
+    // 4. Collection Rules: /users/{userId}
+    match /users/{userId} {
+      allow get: if isSignedIn() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        (resource == null || existing().uid == request.auth.uid);
+
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == userId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        request.auth.uid == userId &&
+        existing().uid == request.auth.uid &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    // 5. Collection Rules: /folders/{folderId}
+    match /folders/{folderId} {
+      allow get: if isSignedIn() &&
+        isValidId(folderId) &&
+        existing().user_id == request.auth.uid;
+
+      allow list: if isSignedIn() &&
+        existing().user_id == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        isValidFolder(incoming()) &&
+        incoming().id == folderId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        isValidFolder(incoming()) &&
+        existing().user_id == request.auth.uid &&
+        incoming().id == existing().id &&
+        incoming().user_id == existing().user_id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Rename tab group
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) ||
+          // Action 2: Change tab group color
+          incoming().diff(existing()).affectedKeys().hasOnly(['color', 'updatedAt']) ||
+          // Action 3: Toggle collapsed state
+          incoming().diff(existing()).affectedKeys().hasOnly(['collapsed', 'updatedAt']) ||
+          // Action 4: Reorder tab group
+          incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
+          // Action 5: Multi-field metadata update
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color', 'collapsed', 'order_index', 'updatedAt'])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(folderId) &&
+        existing().user_id == request.auth.uid;
+    }
+
+    // 6. Collection Rules: /links/{linkId}
+    match /links/{linkId} {
+      allow get: if isSignedIn() &&
+        isValidId(linkId) &&
+        existing().user_id == request.auth.uid;
+
+      allow list: if isSignedIn() &&
+        existing().user_id == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(linkId) &&
+        isValidLinkItem(incoming()) &&
+        incoming().id == linkId &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isParentFolderOwnedByCaller(incoming().folder_id);
+
+      allow update: if isVerifiedUser() &&
+        isValidId(linkId) &&
+        isValidLinkItem(incoming()) &&
+        existing().user_id == request.auth.uid &&
+        incoming().id == existing().id &&
+        incoming().user_id == existing().user_id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isParentFolderOwnedByCaller(incoming().folder_id) && (
+          // Action 1: Edit title or description
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']) ||
+          // Action 2: Move link across groups or reorder
+          incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'status', 'order_index', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'order_index', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt'])
+        );
+
+      allow delete: if isVerifiedUser() &&
+        isValidId(linkId) &&
+        existing().user_id == request.auth.uid;
+    }
+  }
+}
