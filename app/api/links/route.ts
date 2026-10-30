@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabaseSnapshot, insertLink, updateLinkById } from '@/lib/db';
 import {
+  extractYouTubeChannelName,
   extractYouTubeVideoId,
   isGenericPlaceholderTitle,
   scrapeUrlMetadata,
   validateAndNormalizeUrl,
 } from '@/lib/scraper';
+import { containsCJK } from '@/lib/cjk-translate';
+import {
+  translateCJKTitleIfNeeded,
+  translateCJKTitlesBatch,
+} from '@/lib/cjk-translate-server';
 import { LinkStatus } from '@/lib/types';
 import {
   attachUserCookie,
@@ -20,10 +26,12 @@ export async function GET(request: NextRequest) {
     try {
       const parsed = new URL(link.url);
       const isYt = Boolean(extractYouTubeVideoId(parsed));
+      const existingChannel = extractYouTubeChannelName(link);
       return (
         isGenericPlaceholderTitle(link.title) ||
         (isYt &&
           (!link.video_duration ||
+            !existingChannel ||
             link.title.toLowerCase().startsWith('watch ') ||
             link.title.startsWith('YouTube Clip (')))
       );
@@ -38,17 +46,26 @@ export async function GET(request: NextRequest) {
         const refreshed = await scrapeUrlMetadata(item.url);
         const shouldUpdateTitle =
           refreshed.title && !isGenericPlaceholderTitle(refreshed.title);
-        if (shouldUpdateTitle || refreshed.video_duration) {
+        if (
+          shouldUpdateTitle ||
+          refreshed.video_duration ||
+          refreshed.channel_name
+        ) {
           updateLinkById(
             item.id,
             {
               title: shouldUpdateTitle ? refreshed.title : item.title,
-              description: shouldUpdateTitle
-                ? refreshed.description
-                : item.description,
+              description:
+                refreshed.channel_name || shouldUpdateTitle
+                  ? refreshed.description
+                  : item.description,
               image_url: refreshed.image_url || item.image_url,
               reading_minutes: refreshed.reading_minutes,
               video_duration: refreshed.video_duration ?? item.video_duration,
+              channel_name:
+                refreshed.channel_name ??
+                extractYouTubeChannelName(item) ??
+                item.channel_name,
             },
             userId
           );
@@ -56,6 +73,25 @@ export async function GET(request: NextRequest) {
       })
     );
     snapshot = getDatabaseSnapshot(userId);
+  }
+
+  // Automatically translate any existing tab titles that contain Chinese, Korean, or Japanese characters/dialect
+  const linksWithCJK = snapshot.links.filter((link) => containsCJK(link.title));
+  if (linksWithCJK.length > 0) {
+    const translations = await translateCJKTitlesBatch(
+      linksWithCJK.map((l) => l.title)
+    );
+    let anyUpdated = false;
+    for (const item of linksWithCJK) {
+      const translated = translations[item.title];
+      if (translated && translated !== item.title) {
+        updateLinkById(item.id, { title: translated }, userId);
+        anyUpdated = true;
+      }
+    }
+    if (anyUpdated) {
+      snapshot = getDatabaseSnapshot(userId);
+    }
   }
 
   const response = NextResponse.json({
@@ -94,10 +130,13 @@ export async function POST(request: NextRequest) {
 
     const scraped = await scrapeUrlMetadata(rawUrl);
 
-    const customTitle =
+    const rawCandidateTitle =
       typeof body.title === 'string' && body.title.trim()
         ? body.title.trim()
         : scraped.title;
+    const customTitle = containsCJK(rawCandidateTitle)
+      ? await translateCJKTitleIfNeeded(rawCandidateTitle)
+      : rawCandidateTitle;
     const customDescription =
       typeof body.description === 'string' && body.description.trim()
         ? body.description.trim()
@@ -131,6 +170,7 @@ export async function POST(request: NextRequest) {
       tags: tags.length > 0 ? tags : ['reference'],
       reading_minutes: scraped.reading_minutes,
       video_duration: scraped.video_duration ?? null,
+      channel_name: scraped.channel_name ?? null,
       scrape_status: scraped.scrape_status,
       status,
     });

@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { Folder, LinkItem, LinkStatus, TabGroupColor } from '@/lib/types';
+import { moveAndReorderGroupLinks } from '@/lib/kanban-rules';
 import {
   getOrCreateClientUserId,
   setAuthenticatedClientUserId,
@@ -56,8 +57,9 @@ let activeFirestoreUnsubscribe: (() => void) | null = null;
 const VIDEO_META_STORAGE_KEY = 'tabflow_video_meta_v1';
 
 interface CachedVideoMeta {
-  video_duration: string;
+  video_duration?: string;
   reading_minutes?: number;
+  channel_name?: string;
 }
 
 function readVideoMetaCache(): Record<string, CachedVideoMeta> {
@@ -77,12 +79,28 @@ function writeVideoMetaCache(
   url: string | undefined,
   meta: CachedVideoMeta
 ): void {
-  if (typeof window === 'undefined' || !meta.video_duration) return;
+  if (
+    typeof window === 'undefined' ||
+    (!meta.video_duration && !meta.channel_name)
+  ) {
+    return;
+  }
   try {
     const cache = readVideoMetaCache();
-    cache[`id:${id}`] = meta;
+    const prevById = cache[`id:${id}`] ?? {};
+    const prevByUrl = url ? (cache[`url:${url.trim()}`] ?? {}) : {};
+    const merged: CachedVideoMeta = {
+      ...prevByUrl,
+      ...prevById,
+      ...(meta.video_duration ? { video_duration: meta.video_duration } : {}),
+      ...(meta.reading_minutes !== undefined
+        ? { reading_minutes: meta.reading_minutes }
+        : {}),
+      ...(meta.channel_name ? { channel_name: meta.channel_name } : {}),
+    };
+    cache[`id:${id}`] = merged;
     if (url) {
-      cache[`url:${url.trim()}`] = meta;
+      cache[`url:${url.trim()}`] = merged;
     }
     window.localStorage.setItem(VIDEO_META_STORAGE_KEY, JSON.stringify(cache));
   } catch {
@@ -98,36 +116,49 @@ function mergeCachedVideoDuration(
   const byId = new Map<string, LinkItem>();
   const byUrl = new Map<string, LinkItem>();
   for (const item of existingLinks) {
-    if (item.video_duration) {
+    if (item.video_duration || item.channel_name) {
       byId.set(item.id, item);
       byUrl.set(item.url.trim(), item);
     }
   }
 
   return incomingLinks.map((link) => {
-    if (link.video_duration) {
+    if (link.video_duration || link.channel_name) {
       writeVideoMetaCache(link.id, link.url, {
-        video_duration: link.video_duration,
+        video_duration: link.video_duration ?? undefined,
         reading_minutes: link.reading_minutes,
+        channel_name: link.channel_name ?? undefined,
       });
-      return link;
     }
     const memMatch = byId.get(link.id) || byUrl.get(link.url.trim());
-    if (memMatch?.video_duration) {
-      return {
-        ...link,
-        video_duration: memMatch.video_duration,
-        reading_minutes: memMatch.reading_minutes || link.reading_minutes,
-      };
-    }
     const storageMatch =
       cache[`id:${link.id}`] || cache[`url:${link.url.trim()}`];
-    if (storageMatch?.video_duration) {
+
+    const resolvedDuration =
+      link.video_duration ||
+      memMatch?.video_duration ||
+      storageMatch?.video_duration ||
+      null;
+    const resolvedChannel =
+      link.channel_name ||
+      memMatch?.channel_name ||
+      storageMatch?.channel_name ||
+      null;
+    const resolvedMinutes =
+      link.reading_minutes ||
+      memMatch?.reading_minutes ||
+      storageMatch?.reading_minutes ||
+      5;
+
+    if (
+      resolvedDuration !== (link.video_duration ?? null) ||
+      resolvedChannel !== (link.channel_name ?? null)
+    ) {
       return {
         ...link,
-        video_duration: storageMatch.video_duration,
-        reading_minutes:
-          storageMatch.reading_minutes ?? link.reading_minutes,
+        video_duration: resolvedDuration,
+        channel_name: resolvedChannel,
+        reading_minutes: resolvedMinutes,
       };
     }
     return link;
@@ -164,12 +195,20 @@ interface LinkStoreState {
         | 'description'
         | 'folder_id'
         | 'status'
+        | 'order_index'
         | 'tags'
         | 'image_url'
         | 'reading_minutes'
         | 'video_duration'
+        | 'channel_name'
       >
     >
+  ) => Promise<void>;
+  reorderLink: (
+    linkId: string,
+    targetFolderId: string | null,
+    targetLinkId?: string | null,
+    position?: 'before' | 'after'
   ) => Promise<void>;
   deleteLink: (id: string) => Promise<void>;
   createFolder: (
@@ -319,10 +358,11 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         throw new Error(data.error || 'Failed to save link.');
       }
       const createdLink = data.link as LinkItem;
-      if (createdLink.video_duration) {
+      if (createdLink.video_duration || createdLink.channel_name) {
         writeVideoMetaCache(createdLink.id, createdLink.url, {
-          video_duration: createdLink.video_duration,
+          video_duration: createdLink.video_duration ?? undefined,
           reading_minutes: createdLink.reading_minutes,
+          channel_name: createdLink.channel_name ?? undefined,
         });
       }
 
@@ -394,10 +434,13 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   updateLink: async (id, patch) => {
     const previousLinks = get().links;
     const targetLink = previousLinks.find((item) => item.id === id);
-    if (patch.video_duration) {
+    if (patch.video_duration || patch.channel_name) {
       writeVideoMetaCache(id, targetLink?.url, {
-        video_duration: patch.video_duration,
+        video_duration:
+          patch.video_duration ?? targetLink?.video_duration ?? undefined,
         reading_minutes: patch.reading_minutes ?? targetLink?.reading_minutes,
+        channel_name:
+          patch.channel_name ?? targetLink?.channel_name ?? undefined,
       });
     }
 
@@ -411,7 +454,8 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       patch.title !== undefined ||
       patch.description !== undefined ||
       (patch.folder_id !== undefined && patch.folder_id !== null) ||
-      patch.status !== undefined;
+      patch.status !== undefined ||
+      patch.order_index !== undefined;
 
     try {
       const authUser = get().authUser;
@@ -444,6 +488,112 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
             error instanceof Error ? error.message : 'Update failed.',
         });
       }
+    }
+  },
+
+  reorderLink: async (
+    linkId,
+    targetFolderId,
+    targetLinkId = null,
+    position = 'after'
+  ) => {
+    if (!linkId) return;
+    if (targetLinkId && linkId === targetLinkId) return;
+
+    const previousLinks = get().links;
+    const movingLink = previousLinks.find((item) => item.id === linkId);
+    if (!movingLink) return;
+
+    const nextLinks = moveAndReorderGroupLinks(previousLinks, {
+      linkId,
+      targetFolderId,
+      targetLinkId,
+      position,
+    });
+
+    const prevById = new Map(previousLinks.map((item) => [item.id, item]));
+    const changedLinks = nextLinks.filter((nextItem) => {
+      const prevItem = prevById.get(nextItem.id);
+      if (!prevItem) return false;
+      return (
+        prevItem.folder_id !== nextItem.folder_id ||
+        prevItem.order_index !== nextItem.order_index
+      );
+    });
+
+    const isSameOrderAndFolder =
+      changedLinks.length === 0 &&
+      nextLinks.every(
+        (item, index) => item.id === previousLinks[index]?.id
+      );
+
+    if (isSameOrderAndFolder) {
+      return;
+    }
+
+    set({ links: nextLinks, errorMessage: null });
+
+    try {
+      const authUser = get().authUser;
+      const folderIdSet = new Set(get().folders.map((f) => f.id));
+
+      if (authUser && canSyncWithFirestore(authUser)) {
+        await Promise.all(
+          changedLinks.map((item) => {
+            const prevItem = prevById.get(item.id);
+            const patch: Partial<
+              Pick<LinkItem, 'folder_id' | 'order_index'>
+            > = {};
+
+            if (
+              item.folder_id &&
+              folderIdSet.has(item.folder_id) &&
+              prevItem?.folder_id !== item.folder_id
+            ) {
+              patch.folder_id = item.folder_id;
+            }
+            if (prevItem?.order_index !== item.order_index) {
+              patch.order_index = item.order_index;
+            }
+
+            if (Object.keys(patch).length === 0) {
+              return Promise.resolve();
+            }
+            return updateLinkInFirestore(item.id, patch);
+          })
+        );
+      }
+
+      const updatedMovingLink = nextLinks.find((item) => item.id === linkId);
+      const response = await fetch(`/api/links/${encodeURIComponent(linkId)}`, {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: getUserHeaders(true),
+        body: JSON.stringify({
+          folder_id: targetFolderId,
+          order_index: updatedMovingLink?.order_index,
+          target_link_id: targetLinkId,
+          position,
+        }),
+      });
+
+      if (!response.ok && !get().isCloudSynced) {
+        throw new Error('Failed to reorder link.');
+      }
+      if (response.ok && !get().isCloudSynced) {
+        const data = await response.json();
+        if (Array.isArray(data.links)) {
+          set((state) => ({
+            links: mergeCachedVideoDuration(data.links, state.links),
+          }));
+        }
+      }
+    } catch (error) {
+      set({
+        links: previousLinks,
+        errorMessage:
+          error instanceof Error ? error.message : 'Failed to reorder link.',
+      });
     }
   },
 

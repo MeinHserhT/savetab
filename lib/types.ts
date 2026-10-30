@@ -47,6 +47,7 @@ export interface LinkItem {
   order_index: number;
   reading_minutes: number;
   video_duration?: string | null;
+  channel_name?: string | null;
   tags: string[];
   scrape_status: 'ok' | 'degraded' | 'manual';
   created_at: string;
@@ -62,6 +63,7 @@ export interface ScrapedMetadata {
   favicon: string;
   reading_minutes: number;
   video_duration?: string | null;
+  channel_name?: string | null;
   scrape_status: 'ok' | 'degraded';
   diagnostics?: string;
 }

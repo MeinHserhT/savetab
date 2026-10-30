@@ -1,4 +1,6 @@
 import { ScrapedMetadata } from './types';
+import { containsCJK } from './cjk-translate';
+import { translateCJKTitleIfNeeded } from './cjk-translate-server';
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -523,6 +525,64 @@ async function fetchYouTubeWatchHtmlDurationSeconds(
   return null;
 }
 
+function extractYouTubeAuthorFromHtml(html: string): string | null {
+  const patterns = [
+    /"videoDetails"\s*:\s*\{[\s\S]{0,1200}?"author"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i,
+    /"ownerChannelName"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i,
+    /<span[^>]+itemprop=["']author["'][\s\S]{0,400}?<link[^>]+itemprop=["']name["'][^>]+content=["']([^"']+)["']/i,
+    /<link[^>]+itemprop=["']name["'][^>]+content=["']([^"']+)["']/i,
+  ];
+
+  for (const regex of patterns) {
+    const match = html.match(regex);
+    if (match?.[1]) {
+      try {
+        const decoded = regex.source.startsWith('"')
+          ? (JSON.parse(`"${match[1]}"`) as string)
+          : decodeHtmlEntities(match[1]);
+        const cleaned = decoded.trim();
+        if (cleaned && cleaned.toLowerCase() !== 'youtube') {
+          return cleaned;
+        }
+      } catch {
+        const cleaned = decodeHtmlEntities(match[1]).trim();
+        if (cleaned && cleaned.toLowerCase() !== 'youtube') {
+          return cleaned;
+        }
+      }
+    }
+  }
+
+  const metaAuthor = extractMetaContent(html, ['author']);
+  if (metaAuthor && metaAuthor.trim().toLowerCase() !== 'youtube') {
+    return metaAuthor.trim();
+  }
+
+  return null;
+}
+
+export function extractYouTubeChannelName(link: {
+  url?: string;
+  domain?: string;
+  channel_name?: string | null;
+  description?: string | null;
+}): string | null {
+  if (typeof link.channel_name === 'string' && link.channel_name.trim()) {
+    return link.channel_name.trim();
+  }
+  if (typeof link.description === 'string' && link.description.trim()) {
+    const match = link.description
+      .trim()
+      .match(
+        /^YouTube video by\s+(.+?)(?:\s*\((?:https?:\/\/|www\.|youtube\.com|youtu\.be)[^)]*\))?\.?$/i
+      );
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+  return null;
+}
+
 export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata {
   const parsedUrl = validateAndNormalizeUrl(rawUrl);
   const domain = parsedUrl.hostname.replace(/^www\./i, '');
@@ -544,6 +604,7 @@ export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata
   ]);
 
   const ytVideoId = extractYouTubeVideoId(parsedUrl);
+  const ytChannelName = ytVideoId ? extractYouTubeAuthorFromHtml(html) : null;
   const rawImage = extractMetaContent(html, ['og:image', 'twitter:image', 'twitter:image:src']);
   const resolvedImage =
     resolveAbsoluteUrl(rawImage, parsedUrl) ||
@@ -555,8 +616,10 @@ export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata
   const hasValidTitle = Boolean(cleanedTitle);
   const title = hasValidTitle ? (cleanedTitle as string) : humanizeFallbackTitle(parsedUrl);
   const description =
-    ogDescription ||
-    `Saved technical reference from ${domain}${parsedUrl.pathname !== '/' ? ` (${parsedUrl.pathname})` : ''}. Metadata synthesized via defensive fallback.`;
+    ytVideoId && ytChannelName
+      ? `YouTube video by ${ytChannelName} (https://www.youtube.com/watch?v=${ytVideoId}).`
+      : ogDescription ||
+        `Saved technical reference from ${domain}${parsedUrl.pathname !== '/' ? ` (${parsedUrl.pathname})` : ''}. Metadata synthesized via defensive fallback.`;
 
   const durationSeconds = extractVideoDurationSeconds(html);
   const video_duration =
@@ -578,6 +641,7 @@ export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata
     favicon,
     reading_minutes,
     video_duration,
+    channel_name: ytChannelName,
     scrape_status,
     diagnostics:
       scrape_status === 'ok'
@@ -622,7 +686,7 @@ async function fetchYouTubeOEmbedMetadata(
       if (!validTitle) continue;
 
       const domain = parsedUrl.hostname.replace(/^www\./i, '');
-      const author = payload.author_name?.trim();
+      const author = payload.author_name?.trim() || null;
       return {
         url: parsedUrl.toString(),
         domain,
@@ -635,6 +699,7 @@ async function fetchYouTubeOEmbedMetadata(
         favicon: 'https://www.youtube.com/favicon.ico',
         reading_minutes: 5,
         video_duration: null,
+        channel_name: author,
         scrape_status: 'ok',
         diagnostics: 'YouTube video title and thumbnail resolved via oEmbed API.',
       };
@@ -660,6 +725,9 @@ export async function scrapeUrlMetadata(
       fetchYouTubeInnertubePlayerDetails(ytVideoId, timeoutMs),
     ]);
 
+    const resolvedChannelName =
+      oembedMeta?.channel_name || innertube.author || null;
+
     let resolvedDurationSec =
       innertube.durationSeconds && innertube.durationSeconds > 0
         ? innertube.durationSeconds
@@ -681,6 +749,14 @@ export async function scrapeUrlMetadata(
     }
 
     if (oembedMeta) {
+      const canonicalWatchUrl = `https://www.youtube.com/watch?v=${ytVideoId}`;
+      oembedMeta.channel_name = resolvedChannelName;
+      if (
+        resolvedChannelName &&
+        !oembedMeta.description.toLowerCase().startsWith('youtube video by ')
+      ) {
+        oembedMeta.description = `YouTube video by ${resolvedChannelName} (${canonicalWatchUrl}).`;
+      }
       if (resolvedDurationSec) {
         oembedMeta.video_duration = formatVideoDuration(resolvedDurationSec);
         oembedMeta.reading_minutes = Math.max(
@@ -688,17 +764,24 @@ export async function scrapeUrlMetadata(
           Math.round(resolvedDurationSec / 60)
         );
       }
+      if (containsCJK(oembedMeta.title)) {
+        oembedMeta.title = await translateCJKTitleIfNeeded(oembedMeta.title);
+      }
       return oembedMeta;
     }
 
-    if (innertube.title || resolvedDurationSec) {
+    if (innertube.title || resolvedDurationSec || resolvedChannelName) {
       const canonicalWatchUrl = `https://www.youtube.com/watch?v=${ytVideoId}`;
+      const rawYtTitle = innertube.title || humanizeFallbackTitle(parsedUrl);
+      const finalYtTitle = containsCJK(rawYtTitle)
+        ? await translateCJKTitleIfNeeded(rawYtTitle)
+        : rawYtTitle;
       return {
         url: parsedUrl.toString(),
         domain,
-        title: innertube.title || humanizeFallbackTitle(parsedUrl),
-        description: innertube.author
-          ? `YouTube video by ${innertube.author} (${canonicalWatchUrl}).`
+        title: finalYtTitle,
+        description: resolvedChannelName
+          ? `YouTube video by ${resolvedChannelName} (${canonicalWatchUrl}).`
           : `YouTube video clip (${canonicalWatchUrl}).`,
         image_url: `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg`,
         favicon: 'https://www.youtube.com/favicon.ico',
@@ -708,6 +791,7 @@ export async function scrapeUrlMetadata(
         video_duration: resolvedDurationSec
           ? formatVideoDuration(resolvedDurationSec)
           : null,
+        channel_name: resolvedChannelName,
         scrape_status: 'ok',
         diagnostics: 'YouTube video metadata and duration resolved via Innertube player API.',
       };
@@ -740,13 +824,18 @@ export async function scrapeUrlMetadata(
         favicon: ytVideoId ? 'https://www.youtube.com/favicon.ico' : `${parsedUrl.origin}/favicon.ico`,
         reading_minutes: 5,
         video_duration: null,
+        channel_name: null,
         scrape_status: 'degraded',
         diagnostics: `HTTP ${response.status} response from origin; degraded gracefully.`,
       };
     }
 
     const html = await response.text();
-    return parseHtmlMetadata(html, parsedUrl.toString());
+    const parsedMeta = parseHtmlMetadata(html, parsedUrl.toString());
+    if (containsCJK(parsedMeta.title)) {
+      parsedMeta.title = await translateCJKTitleIfNeeded(parsedMeta.title);
+    }
+    return parsedMeta;
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'Network timeout or unreachable host';
     return {
@@ -758,6 +847,7 @@ export async function scrapeUrlMetadata(
       favicon: ytVideoId ? 'https://www.youtube.com/favicon.ico' : `${parsedUrl.origin}/favicon.ico`,
       reading_minutes: 5,
       video_duration: null,
+      channel_name: null,
       scrape_status: 'degraded',
       diagnostics: `Scraper fallback triggered: ${reason}`,
     };

@@ -4,6 +4,7 @@ import { Folder, LinkItem, LinkStatus, TabGroupColor, User } from './types';
 import {
   isLegacyMockLink,
   isLegacySeedFolder,
+  moveAndReorderGroupLinks,
   moveAndReorderLinks,
   sortLaneLinks,
 } from './kanban-rules';
@@ -195,6 +196,7 @@ export function insertLink(
     order_index: 0,
     reading_minutes: input.reading_minutes,
     video_duration: input.video_duration ?? null,
+    channel_name: input.channel_name ?? null,
     tags: input.tags,
     scrape_status: input.scrape_status,
     created_at: now,
@@ -224,8 +226,12 @@ export function updateLinkById(
       | 'image_url'
       | 'reading_minutes'
       | 'video_duration'
+      | 'channel_name'
     >
-  >,
+  > & {
+    target_link_id?: string | null;
+    position?: 'before' | 'after';
+  },
   userId: string = DEFAULT_USER.id
 ): { link: LinkItem | null; links: LinkItem[] } {
   const store = ensureUserExists(loadStore(), userId);
@@ -239,8 +245,9 @@ export function updateLinkById(
     };
   }
 
+  const { target_link_id, position, ...restPatch } = patch;
   const definedPatch = Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== undefined)
+    Object.entries(restPatch).filter(([, value]) => value !== undefined)
   );
 
   let userLinks = store.links
@@ -255,11 +262,30 @@ export function updateLinkById(
         : item
     );
 
-  if (patch.status !== undefined || patch.order_index !== undefined) {
-    const targetStatus = patch.status ?? existing.status;
+  if (
+    target_link_id !== undefined ||
+    position !== undefined ||
+    restPatch.folder_id !== undefined
+  ) {
+    const targetFolderId =
+      restPatch.folder_id !== undefined
+        ? restPatch.folder_id
+        : existing.folder_id;
+    userLinks = moveAndReorderGroupLinks(userLinks, {
+      linkId: id,
+      targetFolderId,
+      targetLinkId: target_link_id,
+      position,
+      targetIndex: restPatch.order_index,
+    });
+  } else if (
+    restPatch.status !== undefined ||
+    restPatch.order_index !== undefined
+  ) {
+    const targetStatus = restPatch.status ?? existing.status;
     const targetIndex =
-      patch.order_index !== undefined
-        ? patch.order_index
+      restPatch.order_index !== undefined
+        ? restPatch.order_index
         : sortLaneLinks(userLinks, targetStatus).findIndex((l) => l.id === id);
     userLinks = moveAndReorderLinks(userLinks, id, targetStatus, targetIndex);
   }

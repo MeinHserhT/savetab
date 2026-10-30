@@ -1,21 +1,30 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
   FolderPlus,
   Globe,
   GripVertical,
+  MoreVertical,
+  Play,
   Plus,
   X,
 } from 'lucide-react';
 import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
-import { filterLinks } from '@/lib/kanban-rules';
+import {
+  clusterGroupLinksBySource,
+  filterLinks,
+  isYouTubeLink,
+  resolveYouTubeChannelFromLink,
+  sortGroupLinks,
+  TabSubGroup,
+} from '@/lib/kanban-rules';
 import { Folder, LinkItem, LinkStatus, TabGroupColor } from '@/lib/types';
 import { ThemeMode } from '@/lib/theme';
 import { EmptyLaneState } from '@/components/EmptyLaneState';
@@ -25,6 +34,7 @@ import {
   parseTabGroupFromTextOrHtml,
   pickNextTabGroupColor,
 } from '@/lib/tab-group-drop';
+import { containsCJK } from '@/lib/cjk-translate';
 
 interface KanbanBoardProps {
   onOpenAddModal: (defaultStatus?: LinkStatus, defaultFolderId?: string) => void;
@@ -260,30 +270,91 @@ function isVideoUrl(url: string): boolean {
 
 function TabLinkRow({
   link,
+  groupId,
+  isDragging,
+  dropPosition,
   onUpdateLinkMeta,
   onDelete,
   onDragStart,
+  onDragEnd,
+  onDragOverLink,
+  onDropOnLink,
 }: {
   link: LinkItem;
+  groupId: string;
+  isDragging: boolean;
+  dropPosition: 'before' | 'after' | null;
   onUpdateLinkMeta: (
     linkId: string,
-    patch: Partial<Pick<LinkItem, 'title' | 'reading_minutes' | 'video_duration'>>
+    patch: Partial<
+      Pick<
+        LinkItem,
+        | 'title'
+        | 'description'
+        | 'reading_minutes'
+        | 'video_duration'
+        | 'channel_name'
+      >
+    >
   ) => void;
   onDelete: (linkId: string) => void;
   onDragStart: (e: React.DragEvent<HTMLElement>, link: LinkItem) => void;
+  onDragEnd: () => void;
+  onDragOverLink: (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    groupId: string
+  ) => void;
+  onDropOnLink: (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    groupId: string
+  ) => void;
 }) {
   const [faviconFailed, setFaviconFailed] = useState(false);
   const [resolvedDuration, setResolvedDuration] = useState<string | null>(
     link.video_duration ?? null
   );
+  const [resolvedChannel, setResolvedChannel] = useState<string | null>(() =>
+    resolveYouTubeChannelFromLink(link)
+  );
   const { t } = useLanguageStore();
 
   const effectiveVideoDuration = link.video_duration || resolvedDuration;
+  const effectiveChannelName =
+    resolveYouTubeChannelFromLink(link) || resolvedChannel;
+  const isYt = isYouTubeLink(link.url, link.domain);
   const needsTitle = isUnresolvedYouTubeUrlAndTitle(link.url, link.title);
   const needsVideoDuration = isVideoUrl(link.url) && !effectiveVideoDuration;
+  const needsYouTubeChannel = isYt && !effectiveChannelName;
+  const needsCJKTranslation = !needsTitle && containsCJK(link.title);
 
   React.useEffect(() => {
-    if (!needsTitle && !needsVideoDuration) return;
+    if (!needsCJKTranslation) return;
+    let cancelled = false;
+    fetch('/api/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: link.title }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.translatedTitle) return;
+        const translated = String(data.translatedTitle).trim();
+        if (translated && translated !== link.title) {
+          onUpdateLinkMeta(link.id, { title: translated });
+        }
+      })
+      .catch(() => {
+        // Ignore background translation errors
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [link.id, link.title, needsCJKTranslation, onUpdateLinkMeta]);
+
+  React.useEffect(() => {
+    if (!needsTitle && !needsVideoDuration && !needsYouTubeChannel) return;
     let cancelled = false;
     fetch('/api/scrape', {
       method: 'POST',
@@ -294,9 +365,16 @@ function TabLinkRow({
       .then((data) => {
         if (cancelled || !data?.metadata) return;
         const patch: Partial<
-          Pick<LinkItem, 'title' | 'reading_minutes' | 'video_duration'>
+          Pick<
+            LinkItem,
+            | 'title'
+            | 'description'
+            | 'reading_minutes'
+            | 'video_duration'
+            | 'channel_name'
+          >
         > = {};
-        if (needsTitle && data.metadata.title) {
+        if ((needsTitle || containsCJK(link.title)) && data.metadata.title) {
           const resolvedTitle = String(data.metadata.title).trim();
           if (resolvedTitle && resolvedTitle !== link.title) {
             patch.title = resolvedTitle;
@@ -310,6 +388,29 @@ function TabLinkRow({
             patch.reading_minutes = data.metadata.reading_minutes;
           }
         }
+        const scrapedChannel =
+          typeof data.metadata.channel_name === 'string' &&
+          data.metadata.channel_name.trim()
+            ? data.metadata.channel_name.trim()
+            : resolveYouTubeChannelFromLink({
+                url: link.url,
+                domain: link.domain,
+                channel_name: data.metadata.channel_name,
+                description: data.metadata.description,
+              });
+        if (scrapedChannel) {
+          setResolvedChannel(scrapedChannel);
+          if (scrapedChannel !== link.channel_name) {
+            patch.channel_name = scrapedChannel;
+          }
+          if (
+            typeof data.metadata.description === 'string' &&
+            data.metadata.description.trim() &&
+            data.metadata.description !== link.description
+          ) {
+            patch.description = data.metadata.description;
+          }
+        }
         if (Object.keys(patch).length > 0) {
           onUpdateLinkMeta(link.id, patch);
         }
@@ -320,79 +421,342 @@ function TabLinkRow({
     return () => {
       cancelled = true;
     };
-  }, [link.id, link.url, link.title, needsTitle, needsVideoDuration, onUpdateLinkMeta]);
+  }, [
+    link.id,
+    link.url,
+    link.domain,
+    link.title,
+    link.channel_name,
+    link.description,
+    needsTitle,
+    needsVideoDuration,
+    needsYouTubeChannel,
+    onUpdateLinkMeta,
+  ]);
+
+  const faviconUrl =
+    link.favicon ||
+    (link.domain
+      ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(
+          link.domain
+        )}&sz=32`
+      : '');
+
+  const rowRef = useRef<HTMLElement | null>(null);
+  const [hoverRect, setHoverRect] = useState<{
+    top: number;
+    bottom: number;
+    left: number;
+    width: number;
+    placeAbove: boolean;
+  } | null>(null);
+
+  const updateHoverPosition = useCallback(() => {
+    if (isDragging) return;
+    const el = rowRef.current;
+    if (!el || typeof window === 'undefined') return;
+    const rect = el.getBoundingClientRect();
+    const cardWidth = Math.min(Math.max(rect.width, 230), 300);
+    const maxLeft = Math.max(8, window.innerWidth - cardWidth - 8);
+    const clampedLeft = Math.min(Math.max(8, rect.left), maxLeft);
+    const placeAbove = window.innerHeight - rect.bottom < 110 && rect.top > 120;
+    setHoverRect({
+      top: rect.top,
+      bottom: rect.bottom,
+      left: clampedLeft,
+      width: cardWidth,
+      placeAbove,
+    });
+  }, [isDragging]);
+
+  useEffect(() => {
+    if (!hoverRect) return;
+    const handleScrollOrResize = () => {
+      setHoverRect(null);
+    };
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+    return () => {
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [hoverRect]);
+
+  const cleanDomain = (link.domain || '').replace(/^www\./i, '');
 
   return (
-    <article
-      draggable
-      onDragStart={(e) => onDragStart(e, link)}
-      aria-label={link.title}
-      className="group rounded-md border border-[var(--tf-border)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] hover:border-[var(--tf-border-strong)] transition-colors cursor-grab active:cursor-grabbing overflow-hidden"
-    >
-      <div className="p-2.5 flex items-start justify-between gap-2 text-[11px]">
-        {/* Browser Tab Favicon + Title + Domain */}
-        <a
-          href={link.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-start gap-2 min-w-0 flex-1 focus-visible:outline-none focus-visible:underline"
+    <div className="relative">
+      {dropPosition === 'before' && (
+        <div
+          aria-hidden="true"
+          data-testid={`link-drop-indicator-before-${link.id}`}
+          className="pointer-events-none absolute -top-1 inset-x-0 z-30 flex items-center"
         >
-          <span className="w-4 h-4 mt-0.5 rounded bg-[var(--tf-surface)] border border-[var(--tf-border)] flex items-center justify-center shrink-0 overflow-hidden">
-            {!faviconFailed && link.favicon ? (
-              <img
-                src={link.favicon}
-                alt=""
-                referrerPolicy="no-referrer"
-                onError={() => setFaviconFailed(true)}
-                className="w-3 h-3 object-contain"
-              />
-            ) : (
-              <Globe className="w-2.5 h-2.5 text-[var(--tf-text-muted)]" />
-            )}
+          <span className="w-2 h-2 rounded-full bg-[var(--tf-accent)] shrink-0 -ml-0.5 shadow-xs" />
+          <span className="h-0.5 flex-1 bg-[var(--tf-accent)] rounded-full shadow-xs" />
+        </div>
+      )}
+
+      <article
+        ref={rowRef}
+        data-testid={`tab-link-card-${link.id}`}
+        draggable
+        onDragStart={(e) => {
+          setHoverRect(null);
+          onDragStart(e, link);
+        }}
+        onDragEnd={onDragEnd}
+        onDragOver={(e) => onDragOverLink(e, link, groupId)}
+        onDrop={(e) => onDropOnLink(e, link, groupId)}
+        onMouseEnter={updateHoverPosition}
+        onMouseLeave={() => setHoverRect(null)}
+        aria-label={link.title}
+        className={`group relative rounded-md border transition-all cursor-grab active:cursor-grabbing overflow-hidden ${
+          isDragging
+            ? 'opacity-45 scale-[0.98] border-dashed border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
+            : dropPosition
+            ? 'border-[var(--tf-accent)] bg-[var(--tf-card-hover)]'
+            : 'border-[var(--tf-border)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] hover:border-[var(--tf-border-strong)]'
+        }`}
+      >
+        <div className="p-2.5 flex items-start justify-between gap-1.5 text-[11px]">
+          <span
+            aria-hidden="true"
+            className="mt-0.5 -ml-1 text-[var(--tf-text-muted)] opacity-0 group-hover:opacity-75 transition-opacity shrink-0"
+          >
+            <GripVertical className="w-3 h-3" />
           </span>
 
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <h3
-              title={link.title}
-              className="text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug line-clamp-2 break-words"
-            >
-              {link.title}
-            </h3>
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--tf-text-muted)]">
-              <span className="truncate text-[var(--tf-text-secondary)]">
-                {link.domain}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="tabular-nums shrink-0">
-                {effectiveVideoDuration || `${link.reading_minutes}m`}
-              </span>
-            </div>
-          </div>
-        </a>
-
-        {/* Open + Close Tab Button */}
-        <div className="flex items-center gap-0.5 shrink-0">
+          {/* Browser Tab Favicon + Title + Domain/Channel */}
           <a
             href={link.url}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label={t.board.openInNewTabAria(link.title)}
-            className="p-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] rounded hover:bg-[var(--tf-surface)] transition-colors"
+            draggable={false}
+            className="flex items-start gap-2 min-w-0 flex-1 focus-visible:outline-none focus-visible:underline"
           >
-            <ExternalLink className="w-3 h-3" />
+            <span className="w-4 h-4 mt-0.5 rounded bg-[var(--tf-surface)] border border-[var(--tf-border)] flex items-center justify-center shrink-0 overflow-hidden">
+              {!faviconFailed && faviconUrl ? (
+                <img
+                  src={faviconUrl}
+                  alt=""
+                  draggable={false}
+                  referrerPolicy="no-referrer"
+                  onError={() => setFaviconFailed(true)}
+                  className="w-3 h-3 object-contain"
+                />
+              ) : (
+                <Globe className="w-2.5 h-2.5 text-[var(--tf-text-muted)]" />
+              )}
+            </span>
+
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <h3 className="text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug truncate">
+                {link.title}
+              </h3>
+              <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--tf-text-muted)]">
+                <span className="truncate text-[var(--tf-text-secondary)]">
+                  {isYt && effectiveChannelName ? effectiveChannelName : link.domain}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums shrink-0">
+                  {effectiveVideoDuration || `${link.reading_minutes}m`}
+                </span>
+              </div>
+            </div>
           </a>
 
-          <button
-            type="button"
-            onClick={() => onDelete(link.id)}
-            aria-label={t.board.deleteLinkAria(link.title)}
-            className="p-1 text-[var(--tf-text-muted)] hover:text-rose-500 rounded hover:bg-[var(--tf-surface)] transition-colors"
-          >
-            <X className="w-3 h-3" />
-          </button>
+          {/* Right Action: Close/Delete Tab Button */}
+          <div className="flex items-center shrink-0">
+            <button
+              type="button"
+              onMouseEnter={(e) => {
+                e.stopPropagation();
+                setHoverRect(null);
+              }}
+              onMouseLeave={() => {
+                updateHoverPosition();
+              }}
+              onClick={() => onDelete(link.id)}
+              aria-label={t.board.deleteLinkAria(link.title)}
+              className="p-0.5 text-[var(--tf-text-muted)] hover:text-rose-500 rounded hover:bg-[var(--tf-surface)] transition-colors"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
         </div>
+      </article>
+
+      {dropPosition === 'after' && (
+        <div
+          aria-hidden="true"
+          data-testid={`link-drop-indicator-after-${link.id}`}
+          className="pointer-events-none absolute -bottom-1 inset-x-0 z-30 flex items-center"
+        >
+          <span className="w-2 h-2 rounded-full bg-[var(--tf-accent)] shrink-0 -ml-0.5 shadow-xs" />
+          <span className="h-0.5 flex-1 bg-[var(--tf-accent)] rounded-full shadow-xs" />
+        </div>
+      )}
+
+      {hoverRect &&
+        !isDragging &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            role="tooltip"
+            data-testid="chrome-tab-hover-card"
+            style={{
+              position: 'fixed',
+              left: `${hoverRect.left}px`,
+              top: hoverRect.placeAbove
+                ? `${hoverRect.top - 6}px`
+                : `${hoverRect.bottom + 6}px`,
+              width: `${hoverRect.width}px`,
+              transform: hoverRect.placeAbove ? 'translateY(-100%)' : undefined,
+            }}
+            className="z-[120] pointer-events-none rounded-xl border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] px-3.5 py-2.5 shadow-2xl transition-opacity duration-100"
+          >
+            <p className="text-[12px] font-semibold text-[var(--tf-text)] leading-snug whitespace-normal break-words">
+              {link.title}
+            </p>
+            <p className="mt-1.5 text-[11px] text-[var(--tf-text-muted)] truncate">
+              {isYt && effectiveChannelName
+                ? `${cleanDomain || 'youtube.com'} • ${effectiveChannelName}`
+                : cleanDomain || link.domain}
+            </p>
+          </div>,
+          document.body
+        )}
+    </div>
+  );
+}
+
+function TabSubGroupBlock({
+  subGroup,
+  groupId,
+  draggedLinkId,
+  linkDropTarget,
+  onUpdateLinkMeta,
+  onDelete,
+  onDragStart,
+  onDragEnd,
+  onDragOverLink,
+  onDropOnLink,
+}: {
+  subGroup: TabSubGroup;
+  groupId: string;
+  draggedLinkId: string | null;
+  linkDropTarget: {
+    linkId: string;
+    groupId: string;
+    position: 'before' | 'after';
+  } | null;
+  onUpdateLinkMeta: (
+    linkId: string,
+    patch: Partial<
+      Pick<
+        LinkItem,
+        | 'title'
+        | 'description'
+        | 'reading_minutes'
+        | 'video_duration'
+        | 'channel_name'
+      >
+    >
+  ) => void;
+  onDelete: (linkId: string) => void;
+  onDragStart: (e: React.DragEvent<HTMLElement>, link: LinkItem) => void;
+  onDragEnd: () => void;
+  onDragOverLink: (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    groupId: string
+  ) => void;
+  onDropOnLink: (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    groupId: string
+  ) => void;
+}) {
+  const [iconFailed, setIconFailed] = useState(false);
+
+  return (
+    <div
+      data-testid={`tab-subgroup-${subGroup.key}`}
+      className="rounded-md border border-[var(--tf-border)] bg-[var(--tf-elevated)]/55 p-1.5 space-y-1.5"
+    >
+      <div
+        onDragOver={(e) => {
+          const firstLink = subGroup.links[0];
+          if (firstLink) {
+            onDragOverLink(e, firstLink, groupId);
+          }
+        }}
+        onDrop={(e) => {
+          const firstLink = subGroup.links[0];
+          if (firstLink) {
+            onDropOnLink(e, firstLink, groupId);
+          }
+        }}
+        className="px-1 py-0.5 flex items-center justify-between gap-1.5"
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          {subGroup.kind === 'youtube-channel' ? (
+            <span className="w-3.5 h-3.5 rounded bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0 text-red-500">
+              <Play className="w-2 h-2 fill-current" />
+            </span>
+          ) : (
+            <span className="w-3.5 h-3.5 rounded bg-[var(--tf-surface)] border border-[var(--tf-border)] flex items-center justify-center shrink-0 overflow-hidden">
+              {!iconFailed && subGroup.favicon ? (
+                <img
+                  src={subGroup.favicon}
+                  alt=""
+                  draggable={false}
+                  referrerPolicy="no-referrer"
+                  onError={() => setIconFailed(true)}
+                  className="w-2.5 h-2.5 object-contain"
+                />
+              ) : (
+                <Globe className="w-2.5 h-2.5 text-[var(--tf-text-muted)]" />
+              )}
+            </span>
+          )}
+          <span
+            title={subGroup.label}
+            className="text-[11px] font-semibold text-[var(--tf-text-secondary)] truncate"
+          >
+            {subGroup.label}
+          </span>
+        </div>
+        <span className="font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] shrink-0">
+          {subGroup.links.length}
+        </span>
       </div>
-    </article>
+
+      <div className="space-y-1">
+        {subGroup.links.map((link) => (
+          <TabLinkRow
+            key={link.id}
+            link={link}
+            groupId={groupId}
+            isDragging={draggedLinkId === link.id}
+            dropPosition={
+              linkDropTarget?.groupId === groupId &&
+              linkDropTarget?.linkId === link.id &&
+              draggedLinkId !== link.id
+                ? linkDropTarget.position
+                : null
+            }
+            onUpdateLinkMeta={onUpdateLinkMeta}
+            onDelete={onDelete}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+            onDragOverLink={onDragOverLink}
+            onDropOnLink={onDropOnLink}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -413,6 +777,7 @@ export function KanbanBoard({
     clearError,
     addLink,
     updateLink,
+    reorderLink,
     deleteLink,
     createFolder,
     createFolderWithLinks,
@@ -426,6 +791,11 @@ export function KanbanBoard({
 
   // Drag & Drop + Bottom Nav Focus + Inline Group Rename State
   const [draggedLinkId, setDraggedLinkId] = useState<string | null>(null);
+  const [linkDropTarget, setLinkDropTarget] = useState<{
+    linkId: string;
+    groupId: string;
+    position: 'before' | 'after';
+  } | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
   const [draggedFolderId, setDraggedFolderId] = useState<string | null>(null);
   const [folderDropTarget, setFolderDropTarget] = useState<{
@@ -433,6 +803,7 @@ export function KanbanBoard({
     position: 'before' | 'after';
   } | null>(null);
   const [openColorPickerId, setOpenColorPickerId] = useState<string | null>(null);
+  const [openActionsMenuId, setOpenActionsMenuId] = useState<string | null>(null);
   const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
@@ -545,11 +916,11 @@ export function KanbanBoard({
   const filteredLinks = useMemo(
     () =>
       filterLinks(links, folders, {
-        folderId: activeFolderId,
+        folderId: null,
         tag: null,
         searchQuery: '',
       }),
-    [links, folders, activeFolderId]
+    [links, folders]
   );
 
   const folderIdSet = useMemo(
@@ -558,17 +929,13 @@ export function KanbanBoard({
   );
 
   const visibleGroups = useMemo(() => {
-    const baseGroups = activeFolderId
-      ? folders.filter(
-          (f) => f.id === activeFolderId || f.parent_id === activeFolderId
-        )
-      : folders;
+    const baseGroups = folders;
 
     const hasUngroupedLinks = filteredLinks.some(
       (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
     );
 
-    if (hasUngroupedLinks && !activeFolderId) {
+    if (hasUngroupedLinks) {
       const virtualGroup: Folder = {
         id: '__ungrouped__',
         user_id: 'current',
@@ -582,7 +949,7 @@ export function KanbanBoard({
     }
 
     return baseGroups;
-  }, [folders, activeFolderId, filteredLinks, folderIdSet, t.sidebar.allSavedTabs]);
+  }, [folders, filteredLinks, folderIdSet, t.sidebar.allSavedTabs]);
 
   const commitEditingGroup = async (groupId: string) => {
     const trimmed = editingGroupName.trim();
@@ -598,6 +965,12 @@ export function KanbanBoard({
     return types.includes('application/x-tabflow-folder-id');
   };
 
+  const isLinkDragEvent = (e: React.DragEvent<HTMLElement>): boolean => {
+    if (draggedLinkId) return true;
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    return types.includes('application/x-tabflow-link-id');
+  };
+
   const handleGroupHeaderDragStart = (
     e: React.DragEvent<HTMLElement>,
     group: Folder
@@ -609,8 +982,7 @@ export function KanbanBoard({
     const target = e.target as HTMLElement | null;
     if (
       target &&
-      (target.tagName === 'INPUT' ||
-        target.closest('button:not([data-group-drag-handle="true"])'))
+      (target.tagName === 'INPUT' || target.closest('button'))
     ) {
       e.preventDefault();
       return;
@@ -619,6 +991,7 @@ export function KanbanBoard({
     e.stopPropagation();
     setDraggedFolderId(group.id);
     setDraggedLinkId(null);
+    setLinkDropTarget(null);
     setDragOverGroupId(null);
     e.dataTransfer.setData('application/x-tabflow-folder-id', group.id);
     e.dataTransfer.setData('text/plain', group.id);
@@ -642,12 +1015,150 @@ export function KanbanBoard({
   };
 
   const handleDragStart = (e: React.DragEvent<HTMLElement>, link: LinkItem) => {
+    e.stopPropagation();
     setDraggedLinkId(link.id);
+    setLinkDropTarget(null);
     setDraggedFolderId(null);
     setFolderDropTarget(null);
     e.dataTransfer.setData('application/x-tabflow-link-id', link.id);
     e.dataTransfer.setData('text/plain', link.id);
     e.dataTransfer.effectAllowed = 'copyMove';
+  };
+
+  const handleLinkDragEnd = () => {
+    setDraggedLinkId(null);
+    setLinkDropTarget(null);
+    setDragOverGroupId(null);
+  };
+
+  const handleDragOverLink = (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    groupId: string
+  ) => {
+    if (isFolderDragEvent(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    e.dataTransfer.dropEffect =
+      e.altKey || e.ctrlKey || e.metaKey ? 'copy' : 'move';
+
+    if (dragOverGroupId !== groupId) {
+      setDragOverGroupId(groupId);
+    }
+
+    // Auto-scroll the vertical tab list when dragging near top/bottom edges
+    const tabListEl = e.currentTarget.closest(
+      '[data-tab-list-scroll="true"]'
+    ) as HTMLElement | null;
+    if (tabListEl && tabListEl.scrollHeight > tabListEl.clientHeight) {
+      const listRect = tabListEl.getBoundingClientRect();
+      const vEdge = 36;
+      if (e.clientY - listRect.top < vEdge) {
+        tabListEl.scrollTop -= 8;
+      } else if (listRect.bottom - e.clientY < vEdge) {
+        tabListEl.scrollTop += 8;
+      }
+    }
+
+    // Auto-scroll the horizontal board when dragging near left/right edges
+    if (boardScrollRef.current) {
+      const boardRect = boardScrollRef.current.getBoundingClientRect();
+      const hEdge = 72;
+      if (e.clientX - boardRect.left < hEdge) {
+        boardScrollRef.current.scrollLeft -= 14;
+      } else if (boardRect.right - e.clientX < hEdge) {
+        boardScrollRef.current.scrollLeft += 14;
+      }
+    }
+
+    if (draggedLinkId === targetLink.id) {
+      if (linkDropTarget !== null) {
+        setLinkDropTarget(null);
+      }
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const nextPos: 'before' | 'after' =
+      e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+
+    if (
+      linkDropTarget?.linkId !== targetLink.id ||
+      linkDropTarget?.groupId !== groupId ||
+      linkDropTarget?.position !== nextPos
+    ) {
+      setLinkDropTarget({
+        linkId: targetLink.id,
+        groupId,
+        position: nextPos,
+      });
+    }
+  };
+
+  const handleDropOnLink = async (
+    e: React.DragEvent<HTMLElement>,
+    targetLink: LinkItem,
+    targetGroupId: string
+  ) => {
+    if (isFolderDragEvent(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: 'before' | 'after' =
+      linkDropTarget?.linkId === targetLink.id
+        ? linkDropTarget.position
+        : e.clientY < rect.top + rect.height / 2
+        ? 'before'
+        : 'after';
+
+    const resolvedTargetFolderId =
+      targetGroupId === '__ungrouped__' ? null : targetGroupId;
+
+    const internalLinkId =
+      e.dataTransfer.getData('application/x-tabflow-link-id') || draggedLinkId;
+    const plainText = e.dataTransfer.getData('text/plain').trim();
+    const matchedLink = links.find(
+      (l) => l.id === internalLinkId || l.id === plainText
+    );
+
+    setDraggedLinkId(null);
+    setLinkDropTarget(null);
+    setDragOverGroupId(null);
+
+    if (matchedLink) {
+      if (e.altKey || e.ctrlKey || e.metaKey) {
+        await addLink({
+          url: matchedLink.url,
+          title: matchedLink.title,
+          folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
+          tags: matchedLink.tags?.length ? matchedLink.tags : ['saved-tab'],
+          status: LinkStatus.UNREAD,
+        });
+      } else {
+        await reorderLink(
+          matchedLink.id,
+          resolvedTargetFolderId,
+          targetLink.id,
+          position
+        );
+      }
+      return;
+    }
+
+    const parsed = parseTabGroupFromDataTransfer(e.dataTransfer);
+    if (parsed.tabs.length > 0) {
+      for (const tab of parsed.tabs) {
+        await addLink({
+          url: tab.url,
+          title: tab.title,
+          folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
+          tags: ['saved-tab'],
+          status: LinkStatus.UNREAD,
+        });
+      }
+    }
   };
 
   const handleDropOnGroup = async (
@@ -684,9 +1195,7 @@ export function KanbanBoard({
     }
 
     const resolvedTargetFolderId =
-      targetFolderId === '__ungrouped__'
-        ? (folders[0]?.id ?? '')
-        : targetFolderId;
+      targetFolderId === '__ungrouped__' ? null : targetFolderId;
 
     const internalLinkId =
       e.dataTransfer.getData('application/x-tabflow-link-id') || draggedLinkId;
@@ -695,20 +1204,29 @@ export function KanbanBoard({
       (l) => l.id === internalLinkId || l.id === plainText
     );
 
+    const activeTargetForLane =
+      linkDropTarget?.groupId === targetFolderId ? linkDropTarget : null;
+
     setDraggedLinkId(null);
+    setLinkDropTarget(null);
     setDragOverGroupId(null);
 
-    if (matchedLink && resolvedTargetFolderId) {
+    if (matchedLink) {
       if (e.altKey || e.ctrlKey || e.metaKey) {
         await addLink({
           url: matchedLink.url,
           title: matchedLink.title,
-          folder_id: resolvedTargetFolderId,
+          folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: matchedLink.tags?.length ? matchedLink.tags : ['saved-tab'],
           status: LinkStatus.UNREAD,
         });
-      } else if (matchedLink.folder_id !== resolvedTargetFolderId) {
-        await updateLink(matchedLink.id, { folder_id: resolvedTargetFolderId });
+      } else {
+        await reorderLink(
+          matchedLink.id,
+          resolvedTargetFolderId,
+          activeTargetForLane?.linkId ?? null,
+          activeTargetForLane?.position ?? 'after'
+        );
       }
       return;
     }
@@ -719,7 +1237,7 @@ export function KanbanBoard({
         await addLink({
           url: tab.url,
           title: tab.title,
-          folder_id: resolvedTargetFolderId || null,
+          folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: ['saved-tab'],
           status: LinkStatus.UNREAD,
         });
@@ -755,6 +1273,7 @@ export function KanbanBoard({
     );
 
     setDraggedLinkId(null);
+    setLinkDropTarget(null);
     setDragOverGroupId(null);
 
     // If user dragged an existing internal tab card onto "Drop to create new Tab Group"
@@ -766,7 +1285,7 @@ export function KanbanBoard({
         nextColor
       );
       if (created) {
-        await updateLink(matchedLink.id, { folder_id: created.id });
+        await reorderLink(matchedLink.id, created.id, null, 'after');
         useLinkStore.setState({
           activeFolderId: null,
           newlyCreatedGroupId: created.id,
@@ -785,6 +1304,7 @@ export function KanbanBoard({
     e.preventDefault();
     e.stopPropagation();
     setDragOverGroupId(null);
+    setLinkDropTarget(null);
 
     const parsed = parseTabGroupFromDataTransfer(e.dataTransfer);
     if (parsed.tabs.length > 0) {
@@ -806,11 +1326,8 @@ export function KanbanBoard({
       return;
     }
 
+    setActiveFolderId(groupId);
     setFocusedGroupId(groupId);
-
-    if (activeFolderId !== null && activeFolderId !== groupId) {
-      setActiveFolderId(null);
-    }
 
     requestAnimationFrame(() => {
       const colEl = document.getElementById(`tab-group-col-${groupId}`);
@@ -838,13 +1355,7 @@ export function KanbanBoard({
     ) as HTMLElement | null;
 
     if (tabListEl && tabListEl.scrollHeight > tabListEl.clientHeight) {
-      const atTop = tabListEl.scrollTop <= 0 && e.deltaY < 0;
-      const atBottom =
-        tabListEl.scrollTop + tabListEl.clientHeight >=
-          tabListEl.scrollHeight - 1 && e.deltaY > 0;
-      if (!atTop && !atBottom) {
-        return;
-      }
+      return;
     }
 
     boardScrollRef.current.scrollLeft += e.deltaY;
@@ -890,7 +1401,7 @@ export function KanbanBoard({
       <div
         ref={boardScrollRef}
         onDragOver={(e) => {
-          if (isFolderDragEvent(e)) {
+          if (isFolderDragEvent(e) || isLinkDragEvent(e)) {
             e.preventDefault();
             if (boardScrollRef.current) {
               const boardRect = boardScrollRef.current.getBoundingClientRect();
@@ -901,7 +1412,9 @@ export function KanbanBoard({
                 boardScrollRef.current.scrollLeft += 14;
               }
             }
-            return;
+            if (isFolderDragEvent(e)) {
+              return;
+            }
           }
           if (visibleGroups.length === 0) {
             e.preventDefault();
@@ -993,13 +1506,13 @@ export function KanbanBoard({
         {visibleGroups.map((group) => {
           const colorKey: TabGroupColor = group.color ?? 'blue';
           const style = groupStyles[colorKey] ?? groupStyles.blue;
-          const groupLinks =
+          const groupLinks = sortGroupLinks(
             group.id === '__ungrouped__'
               ? filteredLinks.filter(
                   (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
                 )
-              : filteredLinks.filter((l) => l.folder_id === group.id);
-          const isCollapsed = Boolean(group.collapsed);
+              : filteredLinks.filter((l) => l.folder_id === group.id)
+          );
           const isDropTarget = dragOverGroupId === group.id;
           const isDraggingThisGroup = draggedFolderId === group.id;
           const isGroupReorderTarget =
@@ -1017,7 +1530,12 @@ export function KanbanBoard({
               key={group.id}
               id={`tab-group-col-${group.id}`}
               aria-label={t.board.tabGroupAria(group.name)}
-              onClick={() => setFocusedGroupId(group.id)}
+              onClick={() => {
+                setFocusedGroupId(group.id);
+                if (group.id !== '__ungrouped__') {
+                  setActiveFolderId(group.id);
+                }
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
                 if (isFolderDragEvent(e)) {
@@ -1051,14 +1569,13 @@ export function KanbanBoard({
                   if (folderDropTarget?.groupId === group.id) {
                     setFolderDropTarget(null);
                   }
+                  if (linkDropTarget?.groupId === group.id) {
+                    setLinkDropTarget(null);
+                  }
                 }
               }}
               onDrop={(e) => handleDropOnGroup(e, group.id)}
-              className={`relative ${
-                visibleGroups.length === 1
-                  ? 'w-full max-w-[460px] sm:w-[360px] md:w-[400px]'
-                  : 'w-[calc(100vw-4.5rem)] max-w-[330px] sm:w-[280px] md:w-[310px] lg:w-[340px] xl:w-[360px] 2xl:w-[380px]'
-              } shrink-0 flex flex-col max-h-full rounded-lg border bg-[var(--tf-surface)] overflow-hidden transition-all ${
+              className={`relative w-[calc(100vw-4.5rem)] max-w-[260px] sm:w-[240px] md:w-[256px] shrink-0 flex flex-col max-h-full rounded-lg border bg-[var(--tf-surface)] overflow-hidden transition-all ${
                 isDraggingThisGroup
                   ? 'opacity-50 scale-[0.98] border-dashed border-[var(--tf-accent)]'
                   : isGroupReorderTarget
@@ -1066,7 +1583,7 @@ export function KanbanBoard({
                   : isDropTarget
                   ? 'border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]'
                   : isFocused
-                  ? 'border-[var(--tf-border-strong)] ring-1 ring-[var(--tf-border-strong)]'
+                  ? 'border-[var(--tf-accent)] ring-2 ring-[var(--tf-accent)]/60 shadow-lg'
                   : `border-[var(--tf-border)] ${style.borderHover}`
               }`}
             >
@@ -1104,41 +1621,9 @@ export function KanbanBoard({
                 }`}
               >
                 <div className="flex items-center gap-1 sm:gap-1.5 min-w-0 flex-1">
-                  {group.id !== '__ungrouped__' && (
-                    <span
-                      data-group-drag-handle="true"
-                      aria-hidden="true"
-                      title={t.board.dragGroupTitle}
-                      className="text-[var(--tf-text-muted)] hover:text-[var(--tf-text-secondary)] transition-colors shrink-0 -ml-0.5 cursor-grab active:cursor-grabbing"
-                    >
-                      <GripVertical className="w-3.5 h-3.5" />
-                    </span>
-                  )}
-
                   <div
-                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold border ${style.badgeBg} ${style.badgeText} min-w-0 max-w-[145px] sm:max-w-[170px] lg:max-w-[190px]`}
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold border ${style.badgeBg} ${style.badgeText} min-w-0 max-w-[148px] sm:max-w-[164px]`}
                   >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        updateFolder(group.id, { collapsed: !isCollapsed })
-                      }
-                      aria-expanded={!isCollapsed}
-                      aria-label={t.board.toggleGroupAria(group.name)}
-                      title={
-                        isCollapsed
-                          ? t.board.expandGroupTitle
-                          : t.board.collapseGroupTitle
-                      }
-                      className="p-0.5 -ml-0.5 rounded hover:bg-black/10 transition-colors shrink-0"
-                    >
-                      {isCollapsed ? (
-                        <ChevronRight className="w-3.5 h-3.5 shrink-0" />
-                      ) : (
-                        <ChevronDown className="w-3.5 h-3.5 shrink-0" />
-                      )}
-                    </button>
-
                     <input
                       id={`tab-group-title-input-${group.id}`}
                       type="text"
@@ -1171,15 +1656,16 @@ export function KanbanBoard({
                   </span>
                 </div>
 
-                {/* Group Actions: Change Color, Open All, Add Link to Group */}
+                {/* Group Actions: Change Color & Three-dots Menu (Open All + New Tab) */}
                 <div className="flex items-center gap-0.5 sm:gap-1 shrink-0 relative">
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      setOpenActionsMenuId(null);
                       setOpenColorPickerId(
                         openColorPickerId === group.id ? null : group.id
-                      )
-                    }
+                      );
+                    }}
                     aria-label={t.board.changeColorAria(group.name)}
                     title={t.board.changeColorTitle}
                     className="p-1.5 rounded hover:bg-[var(--tf-surface)] flex items-center justify-center"
@@ -1188,7 +1674,7 @@ export function KanbanBoard({
                   </button>
 
                   {openColorPickerId === group.id && (
-                    <div className="absolute right-0 top-8 z-20 p-2 rounded-md border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-xl grid grid-cols-5 gap-1.5 w-max">
+                    <div className="absolute right-0 top-8 z-30 p-2 rounded-md border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-xl grid grid-cols-5 gap-1.5 w-max">
                       {COLOR_KEYS.map((cKey) => (
                         <button
                           key={cKey}
@@ -1210,86 +1696,162 @@ export function KanbanBoard({
                     </div>
                   )}
 
-                  {groupLinks.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => handleOpenAllInGroup(groupLinks)}
-                      className="px-1.5 py-1 text-[11px] font-mono text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] rounded transition-colors whitespace-nowrap"
-                    >
-                      {t.board.openAll}
-                    </button>
-                  )}
-
                   <button
                     type="button"
-                    onClick={() => onOpenAddModal(LinkStatus.UNREAD, group.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenColorPickerId(null);
+                      setOpenActionsMenuId(
+                        openActionsMenuId === group.id ? null : group.id
+                      );
+                    }}
+                    aria-haspopup="menu"
+                    aria-expanded={openActionsMenuId === group.id}
                     aria-label={t.board.addLinkToGroupAria(group.name)}
-                    title={t.board.addLinkToGroupTitle(group.name)}
                     className="p-1 text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] rounded transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5" />
+                    <MoreVertical className="w-3.5 h-3.5" />
                   </button>
+
+                  {openActionsMenuId === group.id && (
+                    <div
+                      role="menu"
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-0 top-8 z-30 min-w-[148px] p-1 rounded-md border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-xl flex flex-col gap-0.5"
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setOpenActionsMenuId(null);
+                          onOpenAddModal(LinkStatus.UNREAD, group.id);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] rounded transition-colors whitespace-nowrap"
+                      >
+                        <Plus className="w-3.5 h-3.5 shrink-0" />
+                        <span>{t.emptyLane.addLink}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={groupLinks.length === 0}
+                        onClick={() => {
+                          setOpenActionsMenuId(null);
+                          handleOpenAllInGroup(groupLinks);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-mono text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] disabled:opacity-40 disabled:pointer-events-none rounded transition-colors whitespace-nowrap"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                        <span>{t.board.openAll}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </header>
 
-              {/* Group Tabs List (Hidden when Collapsed like Chrome Tab Groups) */}
-              {!isCollapsed && (
-                <div
-                  data-tab-list-scroll="true"
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    if (isFolderDragEvent(e)) {
-                      return;
+              {/* Group Tabs List */}
+              <div
+                data-tab-list-scroll="true"
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (isFolderDragEvent(e)) {
+                    return;
+                  }
+                  if (dragOverGroupId !== group.id) {
+                    setDragOverGroupId(group.id);
+                  }
+                  // If hovering the empty area of the scroll container itself (not on a specific link card),
+                  // clear any stale card drop target from another lane
+                  if (
+                    e.target === e.currentTarget &&
+                    linkDropTarget &&
+                    linkDropTarget.groupId !== group.id
+                  ) {
+                    setLinkDropTarget(null);
+                  }
+                }}
+                onDrop={(e) => handleDropOnGroup(e, group.id)}
+                className={`p-2 space-y-1.5 flex-1 min-h-0 overflow-y-auto overscroll-contain transition-colors ${
+                  isDropTarget ? 'bg-[var(--tf-accent-soft)]' : ''
+                }`}
+              >
+                {isLoading ? (
+                  <div className="h-14 rounded-md bg-[var(--tf-elevated)] animate-pulse" />
+                ) : groupLinks.length === 0 ? (
+                  <EmptyLaneState
+                    group={group}
+                    isDragOver={isDropTarget}
+                    onAddViaModal={(folderId) =>
+                      onOpenAddModal(LinkStatus.UNREAD, folderId)
                     }
-                    if (dragOverGroupId !== group.id) {
-                      setDragOverGroupId(group.id);
-                    }
-                  }}
-                  onDrop={(e) => handleDropOnGroup(e, group.id)}
-                  className={`p-2.5 sm:p-3 space-y-2 flex-1 min-h-0 overflow-y-auto transition-colors ${
-                    isDropTarget ? 'bg-[var(--tf-accent-soft)]' : ''
-                  }`}
-                >
-                  {isLoading ? (
-                    <div className="h-14 rounded-md bg-[var(--tf-elevated)] animate-pulse" />
-                  ) : groupLinks.length === 0 ? (
-                    <EmptyLaneState
-                      group={group}
-                      isDragOver={isDropTarget}
-                      onAddViaModal={(folderId) =>
-                        onOpenAddModal(LinkStatus.UNREAD, folderId)
-                      }
-                      onQuickSaveUrl={async (url, folderId) => {
-                        const created = await addLink({
-                          url,
-                          folder_id: folderId,
-                          tags: ['saved-tab'],
-                          status: LinkStatus.UNREAD,
-                        });
-                        return Boolean(created);
-                      }}
-                    />
-                  ) : (
-                    <>
-                      {groupLinks.map((link) => (
-                        <TabLinkRow
-                          key={link.id}
-                          link={link}
-                          onUpdateLinkMeta={updateLink}
-                          onDelete={deleteLink}
-                          onDragStart={handleDragStart}
-                        />
-                      ))}
+                    onQuickSaveUrl={async (url, folderId) => {
+                      const created = await addLink({
+                        url,
+                        folder_id: folderId,
+                        tags: ['saved-tab'],
+                        status: LinkStatus.UNREAD,
+                      });
+                      return Boolean(created);
+                    }}
+                  />
+                ) : (
+                  <>
+                    {(() => {
+                      const { items } = clusterGroupLinksBySource(groupLinks);
+                      return (
+                        <>
+                          {items.map((entry) =>
+                            entry.type === 'subgroup' ? (
+                              <TabSubGroupBlock
+                                key={entry.subGroup.key}
+                                subGroup={entry.subGroup}
+                                groupId={group.id}
+                                draggedLinkId={draggedLinkId}
+                                linkDropTarget={linkDropTarget}
+                                onUpdateLinkMeta={updateLink}
+                                onDelete={deleteLink}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleLinkDragEnd}
+                                onDragOverLink={handleDragOverLink}
+                                onDropOnLink={handleDropOnLink}
+                              />
+                            ) : (
+                              <TabLinkRow
+                                key={entry.link.id}
+                                link={entry.link}
+                                groupId={group.id}
+                                isDragging={draggedLinkId === entry.link.id}
+                                dropPosition={
+                                  linkDropTarget?.groupId === group.id &&
+                                  linkDropTarget?.linkId === entry.link.id &&
+                                  draggedLinkId !== entry.link.id
+                                    ? linkDropTarget.position
+                                    : null
+                                }
+                                onUpdateLinkMeta={updateLink}
+                                onDelete={deleteLink}
+                                onDragStart={handleDragStart}
+                                onDragEnd={handleLinkDragEnd}
+                                onDragOverLink={handleDragOverLink}
+                                onDropOnLink={handleDropOnLink}
+                              />
+                            )
+                          )}
+                        </>
+                      );
+                    })()}
 
-                      {isDropTarget && (
+                    {isDropTarget &&
+                      (!linkDropTarget ||
+                        linkDropTarget.groupId !== group.id) && (
                         <div className="rounded-md border border-dashed border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] px-3 py-2 text-center text-[11px] font-medium text-[var(--tf-accent-text)]">
                           {t.board.dropToAdd(group.name)}
                         </div>
                       )}
-                    </>
-                  )}
-                </div>
-              )}
+                  </>
+                )}
+              </div>
             </section>
           );
         })}
@@ -1363,14 +1925,14 @@ export function KanbanBoard({
           <nav
             aria-label={t.board.bottomNavAria}
             onWheel={handleBottomNavWheel}
-            className="pointer-events-auto flex items-center gap-1 sm:gap-1.5 p-1 sm:p-1.5 rounded-xl border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] backdrop-blur-md shadow-2xl max-w-full overflow-x-auto"
+            className="pointer-events-auto flex items-center gap-1 px-1 py-0.5 sm:px-1.5 sm:py-1 rounded-lg border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] backdrop-blur-md shadow-2xl max-w-full overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           >
             <button
               type="button"
               onClick={() => handleScrollBoardBy(-320)}
               aria-label={t.board.scrollLeftAria}
               title={t.board.scrollLeftTitle}
-              className="p-1 sm:p-1.5 rounded-lg text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] transition-colors shrink-0"
+              className="p-1 rounded-md text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] transition-colors shrink-0"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
@@ -1407,7 +1969,7 @@ export function KanbanBoard({
                     }
                   }}
                   onDrop={(e) => handleDropOnGroup(e, group.id)}
-                  className={`inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-all whitespace-nowrap shrink-0 border ${
+                  className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap shrink-0 border ${
                     isDropTarget
                       ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] text-[var(--tf-text)] scale-[1.02]'
                       : isSelected
@@ -1433,7 +1995,7 @@ export function KanbanBoard({
               onClick={() => handleScrollBoardBy(320)}
               aria-label={t.board.scrollRightAria}
               title={t.board.scrollRightTitle}
-              className="p-1 sm:p-1.5 rounded-lg text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] transition-colors shrink-0"
+              className="p-1 rounded-md text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] transition-colors shrink-0"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </button>

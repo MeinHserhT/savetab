@@ -38,7 +38,7 @@ export function Sidebar() {
     reorderFolders,
     deleteFolder,
     addLink,
-    updateLink,
+    reorderLink,
   } = useLinkStore();
 
   const { mode } = useThemeStore();
@@ -143,7 +143,7 @@ export function Sidebar() {
 
     if (matchedLink) {
       if (matchedLink.folder_id !== targetFolderId) {
-        await updateLink(matchedLink.id, { folder_id: targetFolderId });
+        await reorderLink(matchedLink.id, targetFolderId, null, 'after');
       }
       return;
     }
@@ -183,7 +183,7 @@ export function Sidebar() {
         nextColor
       );
       if (created) {
-        await updateLink(matchedLink.id, { folder_id: created.id });
+        await reorderLink(matchedLink.id, created.id, null, 'after');
         useLinkStore.setState({
           activeFolderId: null,
           newlyCreatedGroupId: created.id,
@@ -221,13 +221,13 @@ export function Sidebar() {
         aria-label={t.sidebar.ariaLabel}
         className={`${
           isCollapsed
-            ? 'w-12 sm:w-14'
-            : 'max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-2xl w-[236px] md:w-[216px] lg:w-[248px] xl:w-[264px]'
+            ? 'w-11 sm:w-12'
+            : 'max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-2xl w-[190px] md:w-[180px] lg:w-[196px] xl:w-[208px]'
         } h-full shrink-0 border-r border-[var(--tf-border)] bg-[var(--tf-surface)] flex flex-col justify-between select-none transition-all duration-200 ease-in-out overflow-hidden`}
       >
         <div
           className={`flex-1 min-h-0 flex flex-col ${
-            isCollapsed ? 'p-1.5 sm:p-2 space-y-2' : 'p-3 sm:p-4 space-y-3'
+            isCollapsed ? 'p-1.5 space-y-2' : 'p-2 sm:p-2.5 space-y-2'
           }`}
         >
           <div className="flex-1 min-h-0 flex flex-col space-y-1.5">
@@ -368,15 +368,27 @@ export function Sidebar() {
                 const isEditing = editingFolderId === folder.id;
                 const count = links.filter((l) => l.folder_id === folder.id).length;
 
+                const handleFocusGroupOnBoard = (folderId: string) => {
+                  setActiveFolderId(folderId);
+                  requestAnimationFrame(() => {
+                    const colEl = document.getElementById(
+                      `tab-group-col-${folderId}`
+                    );
+                    colEl?.scrollIntoView({
+                      behavior: 'smooth',
+                      inline: 'center',
+                      block: 'nearest',
+                    });
+                  });
+                };
+
                 if (isCollapsed) {
                   return (
                     <button
                       key={folder.id}
                       id={`sidebar-folder-${folder.id}`}
                       type="button"
-                      onClick={() =>
-                        setActiveFolderId(isSelected ? null : folder.id)
-                      }
+                      onClick={() => handleFocusGroupOnBoard(folder.id)}
                       onDragOver={(e) => {
                         e.preventDefault();
                         if (dragOverFolderId !== folder.id) {
@@ -395,7 +407,7 @@ export function Sidebar() {
                         isDropTarget
                           ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)]'
                           : isSelected
-                          ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-border)]'
+                          ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]/50'
                           : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
                       }`}
                     >
@@ -452,18 +464,16 @@ export function Sidebar() {
                         : isDropTarget
                         ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)] text-[var(--tf-text)]'
                         : isSelected
-                        ? 'bg-[var(--tf-elevated)] border-[var(--tf-border)] text-[var(--tf-text)]'
+                        ? 'bg-[var(--tf-elevated)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]/40 text-[var(--tf-text)]'
                         : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
                     }`}
                   >
                     <div
-                      onClick={() =>
-                        setActiveFolderId(isSelected ? null : folder.id)
-                      }
-                      className="flex-1 flex items-center justify-between pl-1.5 pr-1.5 py-1.5 text-xs font-medium min-w-0 cursor-grab active:cursor-grabbing"
+                      onClick={() => handleFocusGroupOnBoard(folder.id)}
+                      className="flex-1 flex items-center justify-between pl-1.5 pr-1.5 py-1.5 text-xs font-medium min-w-0 cursor-pointer"
                     >
                       <span className="flex items-center gap-1.5 min-w-0 flex-1">
-                        <GripVertical className="w-3 h-3 shrink-0 text-[var(--tf-text-muted)] opacity-60 group-hover:opacity-100 transition-opacity" />
+                        <GripVertical className="w-3 h-3 shrink-0 text-[var(--tf-text-muted)] opacity-60 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing" />
                         <span
                           className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dot}`}
                         />
@@ -471,7 +481,7 @@ export function Sidebar() {
                           type="text"
                           value={isEditing ? editingName : folder.name}
                           onFocus={() => {
-                            setActiveFolderId(folder.id);
+                            handleFocusGroupOnBoard(folder.id);
                             setEditingFolderId(folder.id);
                             setEditingName(folder.name);
                           }}

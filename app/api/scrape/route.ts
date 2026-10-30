@@ -4,6 +4,8 @@ import {
   scrapeUrlMetadata,
   validateAndNormalizeUrl,
 } from '@/lib/scraper';
+import { containsCJK } from '@/lib/cjk-translate';
+import { translateCJKTitleIfNeeded } from '@/lib/cjk-translate-server';
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,6 +30,9 @@ export async function POST(request: NextRequest) {
     // If raw HTML fixture is supplied (e.g. from Scraper Lab or integration test), parse deterministically
     if (typeof body.htmlFixture === 'string') {
       const metadata = parseHtmlMetadata(body.htmlFixture, rawUrl);
+      if (containsCJK(metadata.title)) {
+        metadata.title = await translateCJKTitleIfNeeded(metadata.title);
+      }
       return NextResponse.json({ metadata });
     }
 

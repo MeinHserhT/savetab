@@ -1,23 +1,30 @@
 import type { Metadata } from 'next';
-import { Plus_Jakarta_Sans, DM_Sans, JetBrains_Mono } from 'next/font/google';
+import {
+  Plus_Jakarta_Sans,
+  Be_Vietnam_Pro,
+  JetBrains_Mono,
+} from 'next/font/google';
 import './globals.css';
 
 const plusJakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
+  subsets: ['latin', 'vietnamese'],
   weight: ['600', '700'],
   variable: '--font-display',
+  display: 'swap',
 });
 
-const dmSans = DM_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
+const beVietnamPro = Be_Vietnam_Pro({
+  subsets: ['latin', 'vietnamese'],
+  weight: ['400', '500', '600', '700'],
   variable: '--font-sans',
+  display: 'swap',
 });
 
 const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
+  subsets: ['latin', 'vietnamese'],
   weight: ['400', '500'],
   variable: '--font-mono',
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
@@ -55,12 +62,12 @@ export default function RootLayout({
 }) {
   return (
     <html
-      lang="en"
-      className={`dark ${plusJakarta.variable} ${dmSans.variable} ${jetbrainsMono.variable}`}
+      lang="vi"
+      className={`dark ${plusJakarta.variable} ${beVietnamPro.variable} ${jetbrainsMono.variable}`}
     >
       <body
         suppressHydrationWarning
-        className="min-h-screen bg-[var(--tf-canvas)] text-[var(--tf-text)]"
+        className="min-h-screen bg-[var(--tf-canvas)] font-sans text-[var(--tf-text)] antialiased"
       >
         {children}
       </body>

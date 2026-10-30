@@ -1,53 +1,57 @@
-# Kế hoạch triển khai: Kéo-thả & Đồng bộ Google Chrome Tab Group tạo nhóm mới
+# Khung Preview Tab Chuẩn Google Chrome & Tinh Gọn Thẻ Tab
 
-## 1. Mục tiêu sản phẩm & Trải nghiệm người dùng (UX)
-Hỗ trợ người dùng đưa toàn bộ một **Tab Group hiện có trên Google Chrome** (hoặc nhiều tab / thư mục bookmark / danh sách URL) vào **TabFlow** để tạo một **Tab Group mới** nhanh chóng với 3 luồng kết hợp:
-1. **Vùng kéo-thả tạo Group mới (Drop Zone) trên Board & Sidebar**:
-   - Thả 1 hoặc nhiều tab, thư mục Bookmark từ thanh dấu trang Chrome, hoặc đoạn văn bản chứa nhiều link vào vùng **"Thả để tạo Tab Group mới"** trên bảng Kanban hoặc dưới danh sách nhóm ở Sidebar.
-   - Hệ thống **tự động tạo ngay nhóm mới với tên mặc định thông minh** (lấy tên thư mục Bookmark nếu có, hoặc tên miền / `"Nhóm tab mới"` kèm màu ngẫu nhiên/tuần tự), tự động thêm toàn bộ các URL vào nhóm mới đó và **tự động cuộn + focus bôi đen ô tên nhóm** để bạn gõ đổi tên ngay lập tức.
-2. **Dán nhanh nhiều URL / Bookmark để tạo Group mới (Quick Paste & Import)**:
-   - Hỗ trợ dán nhanh (`Ctrl+V` / `Cmd+V` trên bảng hoặc qua nút **"Nhập Tab Group / Dán nhiều URL"**) danh sách nhiều URL hoặc mã HTML Bookmark xuất từ Chrome để gom tất cả thành một Tab Group mới chỉ với 1 thao tác.
-3. **Gói Tiện ích mở rộng Chrome (TabFlow Chrome Extension - Manifest V3)**:
-   - Cung cấp sẵn bộ cài đặt Chrome Extension nhẹ tích hợp trực tiếp API `chrome.tabGroups` và `chrome.tabs` của Google Chrome.
-   - Hiển thị danh sách các **Tab Group đang mở trên Chrome** (giữ nguyên **tên nhóm**, **màu sắc gốc của Chrome**, và **danh sách tất cả các tab** bên trong).
-   - Cho phép **kéo-thả nguyên thẻ Tab Group từ popup/sidepanel của Extension sang trang TabFlow** hoặc bấm **1 nút "Đưa vào TabFlow"** để tạo ngay Tab Group mới với đúng tên, đúng màu và toàn bộ tab bên trong.
+Loại bỏ biểu tượng nguồn (YouTube/favicon phụ) ở góc dưới bên phải mỗi thẻ tab và bổ sung khung **Tab Hover Card** theo phong cách Google Chrome hiển thị tiêu đề đầy đủ cùng tên miền ngay khi rê chuột vào tab.
 
----
+### User Review & Critical Decisions
 
-## 2. Thiết kế kiến trúc & Các thành phần cần xây dựng
+> [!IMPORTANT]
+> **Các quyết định thiết kế đã xác nhận từ người dùng:**
+> - **Nội dung khung Preview**: Hiển thị **tiêu đề đầy đủ (Full Title)** và **tên miền (Domain/Host)** giống **Tab Hover Card cơ bản của Google Chrome**, đồng thời loại bỏ hoàn toàn biểu tượng nguồn nhỏ ở góc phải của từng tab để giao diện thoáng và sạch hơn.
+> - **Cơ chế kích hoạt & Vị trí**: Xuất hiện ngay bên dưới hoặc bên cạnh thẻ tab khi người dùng rê chuột (hover) vào tab đó, tự động căn chỉnh để không bị che khuất bởi khung cuộn của cột Group hay tràn ra ngoài màn hình.
 
-### 2.1. Bộ giải mã dữ liệu kéo-thả & dán đa định dạng (`lib/tab-group-drop.ts`)
-Xây dựng module phân tích `DataTransfer` (khi kéo-thả) và `ClipboardData` (khi dán) hỗ trợ trích xuất cả **thông tin nhóm (tên nhóm, màu sắc)** lẫn **danh sách nhiều tab**:
-- **Định dạng gói TabFlow / Chrome Extension (`application/x-tabflow-tabgroup` hoặc JSON payload)**:
-  - Đọc trực tiếp `{ name, color, tabs: [{ url, title, favIconUrl }] }` để giữ nguyên tên nhóm và ánh xạ bảng màu Chrome (`grey` -> `zinc`, `blue` -> `blue`, `red` -> `red`, `yellow` -> `amber`, `green` -> `emerald`, `pink` -> `rose`, `purple` -> `purple`, `cyan` -> `cyan`, `orange` -> `orange`).
-- **Định dạng HTML (`text/html`) khi kéo thư mục Bookmark hoặc nhiều link**:
-  - Phân tích cây DOM từ `text/html`: nhận diện thẻ tiêu đề thư mục (`<h3>`, `dl/dt`, hoặc thuộc tính `data-group-name`) làm tên nhóm gợi ý, đồng thời trích xuất toàn bộ các thẻ `<a href="https://...">Tiêu đề</a>` bên trong.
-- **Định dạng `text/uri-list` & `text/plain` nhiều dòng**:
-  - Tách tất cả các URL hợp lệ (`http://`, `https://`) trên nhiều dòng hoặc cách nhau bởi khoảng trắng, loại bỏ trùng lặp.
-- **Tự động sinh tên nhóm mặc định thông minh**:
-  - Nếu payload có tên nhóm (từ Extension hoặc thư mục Bookmark) -> dùng tên đó.
-  - Nếu không có -> đặt tên mặc định theo ngôn ngữ hiện tại (ví dụ: `"Nhóm tab mới"` / `"New Tab Group"` hoặc theo tên miền chính nếu các tab cùng domain).
+### 1. Overview & Core Concept
+- **Loại bỏ biểu tượng nguồn trùng lặp bên phải mỗi tab**: Mỗi thẻ tab vốn đã có favicon nhận diện ở bên trái tiêu đề và được phân nhóm thông minh theo kênh YouTube hoặc tên miền. Việc gỡ bỏ icon nhỏ ở góc dưới bên phải giúp thẻ tab gọn gàng, dành trọn không gian bên phải cho nút đóng tab (`×`) khi rê chuột.
+- **Trải nghiệm Chrome Tab Hover Card tức thì**: Khi tiêu đề trang web hoặc video dài bị cắt gọn (`truncate`) trong danh sách cột hẹp, người dùng chỉ cần di chuột qua bất kỳ tab nào để xem ngay một khung nổi sắc nét hiển thị trọn vẹn tiêu đề (hỗ trợ nhiều dòng) và tên miền gốc bên dưới, tương tự trải nghiệm duyệt tab trên Google Chrome.
 
-### 2.2. Nâng cấp Store quản lý tạo Group + Nhiều Link (`store/useLinkStore.ts`)
-- Bổ sung action `createFolderWithLinks(payload: { name: string; color?: TabGroupColor; tabs: { url: string; title?: string }[] })`:
-  - Tạo Tab Group mới qua `/api/folders` và đồng bộ Firestore (`createFolderInFirestore`).
-  - Set `activeFolderId` về ID nhóm vừa tạo và đặt trạng thái ` newlyCreatedGroupId` để giao diện tự động cuộn tới cột nhóm mới và **focus + select toàn bộ chữ trong ô `<input>` tên nhóm** để người dùng sửa tên ngay nếu muốn.
-  - Thêm tuần tự/song song các tab vào nhóm mới và tự động gọi scrape metadata (tiêu đề, thời lượng video YouTube, favicon) ở hậu cảnh.
+### 2. User Experience & Visual Design
+- **Cấu trúc thị giác chuẩn Chrome Tab Hover Card**:
+  - **Bề mặt & Viền**: Sử dụng nền nổi đồng bộ với hệ thống giao diện hiện tại (`var(--tf-elevated)` kết hợp hiệu ứng đổ bóng sâu `shadow-xl` và viền mảnh `1px solid var(--tf-border)`), bo góc `10px` (`rounded-xl`) sắc sảo.
+  - **Phân cấp Typography**:
+    - **Tiêu đề đầy đủ (Full Title)**: Cỡ chữ `12.5px`, độ đậm `font-semibold`, màu chữ chính `var(--tf-text)`, cho phép xuống dòng tự nhiên (` whitespace-normal break-words leading-snug`) để đọc trọn vẹn các tiêu đề bài viết hoặc video dài.
+    - **Tên miền (Domain Footer)**: Nằm ở phần chân của Hover Card, cỡ chữ `11px`, màu chữ phụ `var(--tf-text-muted)`, hiển thị tên miền sạch (bỏ `www.`) kèm biểu tượng favicon nhỏ hoặc tên kênh nếu là video YouTube để nhận diện tức thì.
+- **Tương tác mượt mà**:
+  - Gỡ bỏ thuộc tính `title` mặc định của trình duyệt trên thẻ tiêu đề để tooltip hệ thống không đè lên khung Chrome Tab Hover Card.
+  - Tự động ẩn khung preview ngay khi người dùng bắt đầu kéo thả (drag) tab hoặc rê chuột vào nút xoá tab (`×`).
 
-### 2.3. Vùng kéo-thả tạo Group mới trên Bảng Kanban (`components/KanbanBoard.tsx`) & Sidebar (`components/Sidebar.tsx`)
-- **Trên Bảng Kanban (`KanbanBoard.tsx`)**:
-  - Thêm cột/vùng thả **"Thả Tab Group / Nhiều Link vào đây để tạo nhóm mới"** nằm ở cuối danh sách các cột Tab Group (và hiển thị nổi bật khi người dùng đang kéo link/file/tab từ ngoài trình duyệt vào trang).
-  - Hỗ trợ thả nhiều URL vào vùng trống trên bảng hoặc vào cột "Tạo nhóm mới" -> lập tức tạo cột Tab Group mới, cuộn mượt tới cột đó và **auto-focus vào ô nhập tên nhóm trên tiêu đề cột**.
-  - Hỗ trợ sự kiện `paste` (`Ctrl+V` / `Cmd+V`) khi người dùng không đứng trong ô input nào: nếu clipboard chứa danh sách URL hoặc dữ liệu Tab Group từ Extension, tự động tạo Tab Group mới và focus vào tên nhóm.
-- **Trên Sidebar (`Sidebar.tsx`)**:
-  - Thêm vùng thả nhanh **"+ Thả để tạo Tab Group mới"** ngay bên dưới danh sách nhóm ở Sidebar, đồng thời nếu người dùng kéo nhiều URL thả vào một nhóm đã có thì thêm toàn bộ các URL đó vào nhóm tương ứng.
+### 3. Key Product Decisions & Trade-Offs
+- **Định vị thoát khỏi khung cuộn (Portal / Fixed Positioning)**:
+  - *Quyết định*: Vì mỗi thẻ tab nằm trong danh sách cuộn dọc (`overflow-y-auto`) và bản thân thẻ có `overflow-hidden`, nếu đặt khung preview bên trong DOM của thẻ thì khung sẽ bị cắt khuất. Do đó, khung Chrome Tab Hover Card sẽ được render thông qua React Portal (`createPortal` vào `document.body`) với tọa độ `fixed` tính toán từ `getBoundingClientRect()` của tab đang được rê chuột.
+  - *Lợi ích*: Khung preview luôn nổi hoàn toàn lên trên mọi cột Group, tự động ưu tiên hiển thị ngay sát bên dưới thẻ tab (hoặc lật lên trên / dịch sang cạnh nếu tab nằm sát đáy hoặc mép phải màn hình).
+- **Tinh giản khu vực hành động bên phải**:
+  - *Quyết định*: Xóa phần tử biểu tượng nguồn ở góc dưới bên phải của mỗi tab và căn chỉnh lại nút xoá (`×`) để thẻ tab cân đối theo trục ngang.
 
-### 2.4. Hộp thoại Nhập nhanh & Tải Chrome Extension (`components/ChromeTabGroupModal.tsx` + `/api/extension/download`)
-- Thêm nút **"Nhập Tab Group Chrome"** trên thanh Header:
-  - **Tab 1 — Dán nhanh danh sách URL / Bookmark**: Ô dán nhanh nhiều URL (hoặc dữ liệu copy từ Chrome / Extension) để tạo nhóm mới ngay lập tức, kèm phím tắt `Ctrl+V` trực tiếp ngoài bảng.
-  - **Tab 2 — Tiện ích Chrome Extension đọc trực tiếp Tab Group**:
-    - Cho phép tải về gói cài đặt sẵn (`/api/extension/download` trả về gói file hoặc bộ file cấu hình Manifest V3 `manifest.json`, `popup.html`, `popup.js` sử dụng `chrome.tabGroups.query({})` và `chrome.tabs.query({})`).
-    - Trong Popup của Extension: liệt kê toàn bộ các Tab Group đang mở trong Chrome với đúng tên và màu sắc; người dùng có thể **kéo thẻ Group từ Extension thả thẳng vào trang TabFlow** hoặc bấm nút **"Gửi sang TabFlow"** (qua `window.postMessage` / URL bridge / Clipboard) để trang tự động tạo Group mới ngay lập tức.
+### 4. Technical Architecture & Data Strategy
 
-### 2.5. Đa ngôn ngữ Anh - Việt (`lib/i18n.ts`)
-- Bổ sung đầy đủ chuỗi ngôn ngữ tiếng Việt và tiếng Anh cho vùng kéo-thả tạo nhóm mới, thông báo trạng thái đang nhập nhiều tab, và hướng dẫn sử dụng Chrome Extension.
+```
++-----------------------------------------------------------------------+
+|                           TabLinkRow (Hover)                          |
+|  [Favicon]  Tiêu đề tab rút gọn...                              [×]   |
++-----------------------------------+-----------------------------------+
+                                    |
+                   onMouseEnter + getBoundingClientRect()
+                                    v
++-----------------------------------------------------------------------+
+|               ChromeTabHoverCard (Portal -> document.body)            |
+|  +-----------------------------------------------------------------+  |
+|  | Tiêu đề đầy đủ của trang web hoặc video YouTube hiển thị trọn   |  |
+|  | vẹn nhiều dòng không bị cắt chữ                                 |  |
+|  | --------------------------------------------------------------- |  |
+|  | [Favicon 12px] youtube.com • Tên kênh (nếu có)                  |  |
+|  +-----------------------------------------------------------------+  |
++-----------------------------------------------------------------------+
+```
+
+- **Quản lý trạng thái Hover & Tọa độ**:
+  - Theo dõi trạng thái hover cùng tọa độ khung hình chữ nhật (`rect`) của thẻ tab đang được trỏ chuột.
+  - Tự động đóng khung preview khi người dùng cuộn danh sách cột (`scroll`), bắt đầu thao tác kéo (`onDragStart`), hoặc rời chuột khỏi thẻ tab (`onMouseLeave`).
+  - Tính toán vị trí `top` và `left` thông minh: mặc định đặt ngay bên dưới thẻ tab (`rect.bottom + 6px`), căn lề trái theo thẻ tab (`rect.left`), nhưng tự động lật lên trên (`rect.top - cardHeight - 6px`) nếu khoảng trống phía dưới màn hình nhỏ hơn chiều cao khung preview, và giới hạn `left` trong phạm vi `window.innerWidth` để không bao giờ bị tràn lề.

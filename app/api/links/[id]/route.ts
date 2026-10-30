@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteLinkById, updateLinkById } from '@/lib/db';
+import { containsCJK } from '@/lib/cjk-translate';
+import { translateCJKTitleIfNeeded } from '@/lib/cjk-translate-server';
 import {
   attachUserCookie,
   resolveUserIdFromRequest,
@@ -14,10 +16,15 @@ export async function PUT(
     const { id } = await context.params;
     const body = await request.json();
 
+    const resolvedTitle =
+      typeof body.title === 'string' && containsCJK(body.title)
+        ? await translateCJKTitleIfNeeded(body.title)
+        : body.title;
+
     const { link, links } = updateLinkById(
       id,
       {
-        title: body.title,
+        title: resolvedTitle,
         description: body.description,
         folder_id: body.folder_id,
         status: body.status,
@@ -27,6 +34,12 @@ export async function PUT(
         image_url: body.image_url,
         reading_minutes: body.reading_minutes,
         video_duration: body.video_duration,
+        channel_name: body.channel_name,
+        target_link_id: body.target_link_id,
+        position:
+          body.position === 'before' || body.position === 'after'
+            ? body.position
+            : undefined,
       },
       userId
     );

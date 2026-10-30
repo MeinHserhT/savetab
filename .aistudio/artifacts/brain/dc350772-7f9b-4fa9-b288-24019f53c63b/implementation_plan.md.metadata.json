@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch thiết kế tính năng kéo-thả tạo Tab Group mới trên Board & Sidebar, dán nhanh nhiều URL/Bookmark để tạo Group, gói Chrome Extension đồng bộ Tab Group trực tiếp từ Chrome, và tự động focus vào ô sửa tên nhóm mới ngay sau khi tạo.",
-  "updatedAt":  "2026-10-29T13:32:05.002451996Z",
+  "summary":  "Kế hoạch loại bỏ icon nguồn nhỏ bên phải mỗi tab và bổ sung khung preview Tab Hover Card chuẩn Google Chrome (hiển thị tiêu đề đầy đủ và tên miền ngay bên dưới/cạnh tab khi rê chuột).",
+  "updatedAt":  "2026-10-30T04:12:33.531737854Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
