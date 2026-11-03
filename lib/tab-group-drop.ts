@@ -1,4 +1,4 @@
-import { TabGroupColor } from './types';
+import { TAB_GROUP_COLORS, TabGroupColor } from './types';
 
 export interface ParsedTabItem {
   url: string;
@@ -12,35 +12,33 @@ export interface ParsedTabGroupDrop {
   isGroupPayload: boolean;
 }
 
-const VALID_COLORS: TabGroupColor[] = [
-  'blue',
-  'cyan',
-  'emerald',
-  'amber',
-  'orange',
-  'red',
-  'rose',
-  'purple',
-  'indigo',
-  'zinc',
-];
-
 const CHROME_COLOR_MAP: Record<string, TabGroupColor> = {
   grey: 'zinc',
   gray: 'zinc',
   zinc: 'zinc',
+  slate: 'slate',
   blue: 'blue',
-  red: 'red',
-  yellow: 'amber',
-  amber: 'amber',
-  green: 'emerald',
-  emerald: 'emerald',
-  pink: 'rose',
-  rose: 'rose',
-  purple: 'purple',
-  cyan: 'cyan',
-  orange: 'orange',
+  ocean: 'ocean',
   indigo: 'indigo',
+  violet: 'violet',
+  purple: 'purple',
+  fuchsia: 'fuchsia',
+  pink: 'pink',
+  rose: 'rose',
+  crimson: 'crimson',
+  red: 'red',
+  coral: 'coral',
+  orange: 'orange',
+  amber: 'amber',
+  gold: 'gold',
+  yellow: 'yellow',
+  lime: 'lime',
+  green: 'green',
+  emerald: 'emerald',
+  mint: 'mint',
+  teal: 'teal',
+  cyan: 'cyan',
+  bronze: 'bronze',
 };
 
 export function mapChromeColorToTabGroupColor(
@@ -51,8 +49,40 @@ export function mapChromeColorToTabGroupColor(
   return CHROME_COLOR_MAP[key];
 }
 
+// Alternates opposing/complementary colors across the color wheel so adjacent groups are maximally distinct
+export const CONTRAST_COLOR_SEQUENCE: readonly TabGroupColor[] = [
+  'blue',
+  'orange',
+  'emerald',
+  'rose',
+  'yellow',
+  'violet',
+  'cyan',
+  'red',
+  'lime',
+  'fuchsia',
+  'amber',
+  'ocean',
+  'mint',
+  'crimson',
+  'gold',
+  'indigo',
+  'coral',
+  'teal',
+  'purple',
+  'green',
+  'pink',
+  'bronze',
+  'slate',
+  'zinc',
+];
+
 export function pickNextTabGroupColor(existingCount: number): TabGroupColor {
-  return VALID_COLORS[Math.abs(existingCount) % VALID_COLORS.length] ?? 'blue';
+  return (
+    CONTRAST_COLOR_SEQUENCE[
+      Math.abs(existingCount) % CONTRAST_COLOR_SEQUENCE.length
+    ] ?? 'blue'
+  );
 }
 
 function normalizeCandidateUrl(raw: string): string | null {
@@ -68,6 +98,17 @@ function normalizeCandidateUrl(raw: string): string | null {
     }
     return parsed.toString();
   } catch {
+    if (
+      !/\s/.test(trimmed) &&
+      /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(\/.*)?$/.test(trimmed)
+    ) {
+      try {
+        const withHttps = new URL(`https://${trimmed}`);
+        return withHttps.toString();
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }
@@ -92,7 +133,6 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
     const parsed = JSON.parse(trimmed);
     if (Array.isArray(parsed)) {
       const tabs: ParsedTabItem[] = [];
-      const seen = new Set<string>();
       for (const item of parsed) {
         const candidateUrl =
           typeof item === 'string'
@@ -100,8 +140,7 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
             : typeof item?.url === 'string'
             ? normalizeCandidateUrl(item.url)
             : null;
-        if (candidateUrl && !seen.has(candidateUrl)) {
-          seen.add(candidateUrl);
+        if (candidateUrl) {
           tabs.push({
             url: candidateUrl,
             title:
@@ -132,7 +171,6 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
       if (!rawTabs) return null;
 
       const tabs: ParsedTabItem[] = [];
-      const seen = new Set<string>();
       for (const item of rawTabs) {
         const candidateUrl =
           typeof item === 'string'
@@ -140,8 +178,7 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
             : typeof item?.url === 'string'
             ? normalizeCandidateUrl(item.url)
             : null;
-        if (candidateUrl && !seen.has(candidateUrl)) {
-          seen.add(candidateUrl);
+        if (candidateUrl) {
           tabs.push({
             url: candidateUrl,
             title:
@@ -187,7 +224,6 @@ function parseHtmlBookmarkOrAnchors(html: string): {
   hasFolderHeading: boolean;
 } {
   const tabs: ParsedTabItem[] = [];
-  const seen = new Set<string>();
 
   // Check for custom data-tabflow-group attributes on container or anchor
   const groupAttrMatch = html.match(/data-tabflow-group-name=["']([^"']+)["']/i);
@@ -208,8 +244,7 @@ function parseHtmlBookmarkOrAnchors(html: string): {
   let match: RegExpExecArray | null;
   while ((match = anchorRegex.exec(html)) !== null) {
     const validUrl = normalizeCandidateUrl(match[1]);
-    if (!validUrl || seen.has(validUrl)) continue;
-    seen.add(validUrl);
+    if (!validUrl) continue;
     const rawTitle = decodeHtmlEntities(match[2].replace(/<[^>]+>/g, ''));
     tabs.push({
       url: validUrl,
@@ -227,7 +262,6 @@ function parseHtmlBookmarkOrAnchors(html: string): {
 
 function extractUrlsFromText(text: string): ParsedTabItem[] {
   const tabs: ParsedTabItem[] = [];
-  const seen = new Set<string>();
 
   const lines = text.split(/\r?\n/);
   for (const rawLine of lines) {
@@ -238,8 +272,7 @@ function extractUrlsFromText(text: string): ParsedTabItem[] {
     const mdMatch = line.match(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/i);
     if (mdMatch) {
       const validUrl = normalizeCandidateUrl(mdMatch[2]);
-      if (validUrl && !seen.has(validUrl)) {
-        seen.add(validUrl);
+      if (validUrl) {
         tabs.push({
           url: validUrl,
           title: mdMatch[1].trim() || undefined,
@@ -250,10 +283,11 @@ function extractUrlsFromText(text: string): ParsedTabItem[] {
 
     const urlMatches = line.match(/https?:\/\/[^\s<>"']+/gi);
     if (urlMatches) {
+      const seenOnLine = new Set<string>();
       for (const rawUrl of urlMatches) {
         const validUrl = normalizeCandidateUrl(rawUrl);
-        if (!validUrl || seen.has(validUrl)) continue;
-        seen.add(validUrl);
+        if (!validUrl || seenOnLine.has(validUrl)) continue;
+        seenOnLine.add(validUrl);
 
         // If line had text before the URL (e.g. "YouTube - https://youtube.com/..."), use as title
         const titleCandidate = line
@@ -272,6 +306,15 @@ function extractUrlsFromText(text: string): ParsedTabItem[] {
               : undefined,
         });
       }
+      continue;
+    }
+
+    // Support scheme-less single domain/URL lines (e.g. "youtube.com/watch?v=..." or "github.com/facebook/react")
+    const schemeLessUrl = normalizeCandidateUrl(line);
+    if (schemeLessUrl) {
+      tabs.push({
+        url: schemeLessUrl,
+      });
     }
   }
 

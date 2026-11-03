@@ -45,6 +45,13 @@ export interface Translations {
     dropNewGroupLabel: string;
     dropNewGroupActive: string;
     dropNewGroupCollapsedTitle: string;
+    foldersSectionTitle: string;
+    addSubfolderTitle: string;
+    addSubfolderAria: (parentName: string) => string;
+    parentGroupLabel: string;
+    topLevelGroupOption: string;
+    tagsSectionTitle: string;
+    clearTagFilter: string;
   };
   board: {
     dismissErrorAria: string;
@@ -78,6 +85,18 @@ export interface Translations {
     dropNewGroupPasteHint: string;
     defaultNewGroupName: string;
     creatingGroupStatus: string;
+    dismissNoticeAria: string;
+    viewGroupBtn: string;
+    duplicateAlertTitle: string;
+    sameWebsiteAlertTitle: string;
+    duplicateWebsiteNotice: (domainOrTitle: string, groupName: string) => string;
+    sameWebsiteGroupedNotice: (sourceLabel: string, groupName: string) => string;
+    removedOldDuplicatesNotice: (count: number) => string;
+    cardViewRich: string;
+    cardViewCompact: string;
+    readingEstimateLabel: (minutes: number) => string;
+    ogCoverPlaceholderLabel: string;
+    filteredByTagLabel: (tag: string) => string;
     colors: Record<TabGroupColor, string>;
   };
   chromeImport: {
@@ -96,6 +115,7 @@ export interface Translations {
     createGroupSubmit: (count: number) => string;
     creatingBtn: string;
     errNoValidUrls: string;
+    duplicateBatchAlert: (count: number, groupName: string) => string;
     extBookmarkTipTitle: string;
     extBookmarkTipDesc: string;
   };
@@ -123,6 +143,9 @@ export interface Translations {
     dropIdleHint: string;
     errEmptyUrl: string;
     errInvalidDrop: string;
+    duplicateUrlWarning: (titleOrDomain: string, groupName: string) => string;
+    duplicateSubmittedDesc: (titleOrDomain: string, groupName: string) => string;
+    tryAnotherUrl: string;
   };
   auth: {
     loading: string;
@@ -224,6 +247,13 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropNewGroupActive: 'Thả ngay để tạo Tab Group mới',
       dropNewGroupCollapsedTitle:
         'Kéo thả tab hoặc thư mục Bookmark vào đây để tạo Tab Group mới',
+      foldersSectionTitle: 'THƯ MỤC & NHÓM',
+      addSubfolderTitle: 'Tạo thư mục con',
+      addSubfolderAria: (parentName) => `Tạo thư mục con trong ${parentName}`,
+      parentGroupLabel: 'Thuộc thư mục cha',
+      topLevelGroupOption: 'Thư mục gốc (Cấp 1)',
+      tagsSectionTitle: 'THẺ PHÂN LOẠI (TAGS)',
+      clearTagFilter: 'Bỏ lọc',
     },
     board: {
       dismissErrorAria: 'Đóng thông báo lỗi',
@@ -259,17 +289,46 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropNewGroupPasteHint: 'Hoặc nhấn Nhập Tab Group / Ctrl+V',
       defaultNewGroupName: 'Nhóm tab mới',
       creatingGroupStatus: 'Đang tạo Tab Group mới...',
+      dismissNoticeAria: 'Đóng thông báo',
+      viewGroupBtn: 'Xem nhóm',
+      duplicateAlertTitle: 'Phát hiện liên kết trùng lặp!',
+      sameWebsiteAlertTitle: 'Đã tự động gộp nhóm',
+      duplicateWebsiteNotice: (domainOrTitle, groupName) =>
+        `Trang web "${domainOrTitle}" đã có trong nhóm "${groupName}". Đã tự động xoá tab trùng lặp.`,
+      sameWebsiteGroupedNotice: (sourceLabel, groupName) =>
+        `Cùng trang web/kênh "${sourceLabel}" — đã tự động gộp vào nhóm "${groupName}".`,
+      removedOldDuplicatesNotice: (count) =>
+        `Đã tự động xoá ${count} tab trùng lặp trong không gian làm việc.`,
+      cardViewRich: 'Thẻ Rich (OG)',
+      cardViewCompact: 'Thu gọn',
+      readingEstimateLabel: (minutes) => `${minutes} phút đọc`,
+      ogCoverPlaceholderLabel: 'Bản xem trước OpenGraph',
+      filteredByTagLabel: (tag) => `Đang lọc theo thẻ #${tag}`,
       colors: {
-        blue: 'Xanh dương',
-        cyan: 'Xanh lơ',
-        emerald: 'Xanh lá',
-        amber: 'Vàng',
-        orange: 'Cam',
-        red: 'Đỏ',
-        rose: 'Hồng',
-        purple: 'Tím',
+        blue: 'Xanh da trời',
+        ocean: 'Xanh đại dương',
         indigo: 'Chàm',
-        zinc: 'Xám',
+        violet: 'Tím biếc',
+        purple: 'Tím',
+        fuchsia: 'Hồng cánh sen',
+        pink: 'Hồng phấn',
+        rose: 'Hồng đào',
+        crimson: 'Đỏ thẫm',
+        red: 'Đỏ tươi',
+        coral: 'Cam san hô',
+        orange: 'Cam',
+        amber: 'Vàng hổ phách',
+        gold: 'Vàng ánh kim',
+        yellow: 'Vàng chanh',
+        lime: 'Xanh cốm',
+        green: 'Xanh lá',
+        emerald: 'Xanh lục bảo',
+        mint: 'Xanh bạc hà',
+        teal: 'Xanh cổ vịt',
+        cyan: 'Xanh lơ',
+        bronze: 'Nâu đồng',
+        slate: 'Xanh đá',
+        zinc: 'Xám khói',
       },
     },
     chromeImport: {
@@ -293,6 +352,8 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       creatingBtn: 'Đang tạo nhóm...',
       errNoValidUrls:
         'Chưa tìm thấy URL hợp lệ (http:// hoặc https://). Vui lòng dán ít nhất 1 liên kết.',
+      duplicateBatchAlert: (count, groupName) =>
+        `Phát hiện ${count} liên kết trùng lặp (đã có trong nhóm "${groupName}" hoặc trùng nhau). Khi tạo nhóm, hệ thống sẽ tự động xoá các bản trùng lặp.`,
       extBookmarkTipTitle: 'Mẹo kéo thả nhanh từ Google Chrome:',
       extBookmarkTipDesc:
         'Nhấp chuột phải vào Tab Group trên Chrome → lưu vào thư mục Dấu trang (hoặc nhấn Ctrl+Shift+D), sau đó kéo thư mục đó từ Thanh dấu trang (Ctrl+Shift+B) thả thẳng vào vùng "Thả để tạo Tab Group mới" trên bảng!',
@@ -321,6 +382,11 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropIdleHint: 'Kéo & thả liên kết bất kỳ vào ô này hoặc nhấn Enter',
       errEmptyUrl: 'Vui lòng nhập hoặc kéo thả một URL hợp lệ.',
       errInvalidDrop: 'Không đọc được URL hợp lệ từ mục vừa thả.',
+      duplicateUrlWarning: (titleOrDomain, groupName) =>
+        `Cảnh báo trùng lặp: Trang web "${titleOrDomain}" đã có sẵn trong nhóm "${groupName}". Nếu bấm Lưu, tab trùng lặp sẽ tự động được gộp và xoá bỏ.`,
+      duplicateSubmittedDesc: (titleOrDomain, groupName) =>
+        `Liên kết "${titleOrDomain}" đã tồn tại trên bảng TabFlow của bạn trong nhóm "${groupName}". Hệ thống đã giữ lại tab hiện có và ngăn tạo bản sao trùng lặp.`,
+      tryAnotherUrl: 'Nhập URL khác',
     },
     auth: {
       loading: 'Đang tải...',
@@ -424,6 +490,13 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropNewGroupActive: 'Drop now to create new Tab Group',
       dropNewGroupCollapsedTitle:
         'Drag & drop tabs or a Bookmark folder here to create a new Tab Group',
+      foldersSectionTitle: 'FOLDERS & GROUPS',
+      addSubfolderTitle: 'Add nested subfolder',
+      addSubfolderAria: (parentName) => `Add subfolder inside ${parentName}`,
+      parentGroupLabel: 'Parent Folder',
+      topLevelGroupOption: 'Root Level (Top Folder)',
+      tagsSectionTitle: 'TAGS',
+      clearTagFilter: 'Clear',
     },
     board: {
       dismissErrorAria: 'Dismiss error',
@@ -459,17 +532,46 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropNewGroupPasteHint: 'Or click Import Tab Group / Ctrl+V',
       defaultNewGroupName: 'New Tab Group',
       creatingGroupStatus: 'Creating new Tab Group...',
+      dismissNoticeAria: 'Dismiss notification',
+      viewGroupBtn: 'View group',
+      duplicateAlertTitle: 'Duplicate Link Detected!',
+      sameWebsiteAlertTitle: 'Auto-Grouped by Website',
+      duplicateWebsiteNotice: (domainOrTitle, groupName) =>
+        `Website "${domainOrTitle}" is already in group "${groupName}". Duplicate tab was removed.`,
+      sameWebsiteGroupedNotice: (sourceLabel, groupName) =>
+        `Same website/channel "${sourceLabel}" detected — automatically grouped into "${groupName}".`,
+      removedOldDuplicatesNotice: (count) =>
+        `Automatically removed ${count} duplicate tab(s) from your workspace.`,
+      cardViewRich: 'Rich Cards',
+      cardViewCompact: 'Compact',
+      readingEstimateLabel: (minutes) => `${minutes}m read`,
+      ogCoverPlaceholderLabel: 'OpenGraph Preview',
+      filteredByTagLabel: (tag) => `Filtered by #${tag}`,
       colors: {
-        blue: 'Blue',
-        cyan: 'Cyan',
-        emerald: 'Green',
-        amber: 'Yellow',
-        orange: 'Orange',
-        red: 'Red',
-        rose: 'Pink',
-        purple: 'Purple',
+        blue: 'Sky Blue',
+        ocean: 'Ocean Blue',
         indigo: 'Indigo',
-        zinc: 'Grey',
+        violet: 'Violet',
+        purple: 'Purple',
+        fuchsia: 'Fuchsia',
+        pink: 'Soft Pink',
+        rose: 'Rose',
+        crimson: 'Crimson',
+        red: 'Red',
+        coral: 'Coral',
+        orange: 'Orange',
+        amber: 'Amber',
+        gold: 'Gold',
+        yellow: 'Yellow',
+        lime: 'Lime',
+        green: 'Forest Green',
+        emerald: 'Emerald',
+        mint: 'Mint',
+        teal: 'Teal',
+        cyan: 'Cyan',
+        bronze: 'Bronze',
+        slate: 'Slate',
+        zinc: 'Warm Grey',
       },
     },
     chromeImport: {
@@ -494,6 +596,8 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       creatingBtn: 'Creating group...',
       errNoValidUrls:
         'No valid URLs (http:// or https://) found. Please paste at least one link.',
+      duplicateBatchAlert: (count, groupName) =>
+        `Detected ${count} duplicate link(s) (already in group "${groupName}" or duplicated in list). Duplicates will be automatically removed.`,
       extBookmarkTipTitle: 'Quick Drag & Drop Tip from Google Chrome:',
       extBookmarkTipDesc:
         'Bookmark your open tabs into a folder (Ctrl+Shift+D in Chrome), then drag that folder from the Chrome Bookmarks Bar (Ctrl+Shift+B) and drop it directly onto "Drop to create new Tab Group" on the board!',
@@ -522,6 +626,11 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropIdleHint: 'Drag & drop any link into this box or press Enter',
       errEmptyUrl: 'Please enter or drop a valid URL.',
       errInvalidDrop: 'Could not read a valid URL from the dropped item.',
+      duplicateUrlWarning: (titleOrDomain, groupName) =>
+        `Duplicate Alert: Website "${titleOrDomain}" is already in group "${groupName}". Saving will merge and remove the duplicate tab.`,
+      duplicateSubmittedDesc: (titleOrDomain, groupName) =>
+        `The link "${titleOrDomain}" already exists on your TabFlow board in group "${groupName}". The existing tab was kept and duplicate creation was prevented.`,
+      tryAnotherUrl: 'Try another URL',
     },
     auth: {
       loading: 'Loading...',

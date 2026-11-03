@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clusterGroupLinksBySource,
+  consolidateLinksAcrossGroups,
+  deduplicateLinks,
   filterLinks,
+  findDuplicateLinkByUrl,
+  findExistingGroupForLinkSource,
   moveAndReorderGroupLinks,
   moveAndReorderLinks,
   sortGroupLinks,
@@ -258,6 +262,69 @@ test('sorts sub-groups of same YouTube channel or same domain/link on top of sta
   );
 });
 
+test('consolidates a new tab from "youtube" group into "learn" group when they share the same YouTube channel or domain', () => {
+  const base = makeFixtureLinks()[0];
+  const folders: Folder[] = [
+    {
+      id: 'fld-learn',
+      user_id: 'u-1',
+      name: 'learn',
+      parent_id: null,
+      order_index: 0,
+    },
+    {
+      id: 'fld-youtube',
+      user_id: 'u-1',
+      name: 'youtube',
+      parent_id: null,
+      order_index: 1,
+    },
+  ];
+
+  const existingInLearn: LinkItem = {
+    ...base,
+    id: 'yt-learn-1',
+    folder_id: 'fld-learn',
+    url: 'https://www.youtube.com/watch?v=learn111111',
+    domain: 'youtube.com',
+    channel_name: '3Blue1Brown',
+    order_index: 0,
+    created_at: '2026-10-25T10:00:00.000Z',
+  };
+
+  const newInYouTubeGroup: LinkItem = {
+    ...base,
+    id: 'yt-new-2',
+    folder_id: 'fld-youtube',
+    url: 'https://www.youtube.com/watch?v=new22222222',
+    domain: 'youtube.com',
+    channel_name: '3Blue1Brown',
+    order_index: 0,
+    created_at: '2026-10-25T11:00:00.000Z',
+  };
+
+  const matchedFolder = findExistingGroupForLinkSource(
+    newInYouTubeGroup,
+    [existingInLearn],
+    folders
+  );
+  assert.equal(matchedFolder, 'fld-learn');
+
+  const consolidated = consolidateLinksAcrossGroups(
+    [existingInLearn, newInYouTubeGroup],
+    folders
+  );
+  assert.equal(consolidated.movedLinks.length, 1);
+  assert.deepEqual(consolidated.movedLinks[0], {
+    linkId: 'yt-new-2',
+    fromFolderId: 'fld-youtube',
+    toFolderId: 'fld-learn',
+  });
+  assert.ok(
+    consolidated.links.every((item) => item.folder_id === 'fld-learn')
+  );
+});
+
 test('detects Chinese, Korean, and Japanese characters and normalizes regional dialects', () => {
   assert.equal(containsCJK('點解佢哋唔返工？ - Cantonese Vlog'), true);
   assert.equal(detectCJKScriptKind('點解佢哋唔返工？'), 'chinese');
@@ -277,6 +344,89 @@ test('detects Chinese, Korean, and Japanese characters and normalizes regional d
     false
   );
 });
+
+test('removes old and new duplicate tabs across groups and merges resolved metadata into the kept tab', () => {
+  const base = makeFixtureLinks()[0];
+  const folders: Folder[] = [
+    {
+      id: 'fld-learn',
+      user_id: 'u-1',
+      name: 'learn',
+      parent_id: null,
+      order_index: 0,
+    },
+    {
+      id: 'fld-youtube',
+      user_id: 'u-1',
+      name: 'youtube',
+      parent_id: null,
+      order_index: 1,
+    },
+  ];
+
+  const oldTabUnresolved: LinkItem = {
+    ...base,
+    id: 'yt-old-1',
+    folder_id: 'fld-learn',
+    url: 'https://youtu.be/abc12345678?si=tracking1',
+    domain: 'youtu.be',
+    title: 'YouTube',
+    channel_name: null,
+    video_duration: null,
+    order_index: 0,
+    created_at: '2026-10-20T09:00:00.000Z',
+  };
+
+  const newTabResolvedDuplicate: LinkItem = {
+    ...base,
+    id: 'yt-new-dup-2',
+    folder_id: 'fld-youtube',
+    url: 'https://www.youtube.com/watch?v=abc12345678&utm_source=share',
+    domain: 'youtube.com',
+    title: 'How Transformers Work Visually',
+    channel_name: '3Blue1Brown',
+    video_duration: '27:14',
+    order_index: 0,
+    created_at: '2026-10-25T12:00:00.000Z',
+  };
+
+  const foundDup = findDuplicateLinkByUrl(
+    'https://youtube.com/watch?v=abc12345678',
+    [oldTabUnresolved, newTabResolvedDuplicate],
+    folders
+  );
+  // Also matches scheme-less URL input (e.g. typed into AddLinkModal without https://)
+  const foundSchemeLessDup = findDuplicateLinkByUrl(
+    'youtube.com/watch?v=abc12345678',
+    [oldTabUnresolved, newTabResolvedDuplicate],
+    folders
+  );
+  assert.equal(foundDup?.id, 'yt-old-1');
+  assert.equal(foundSchemeLessDup?.id, 'yt-old-1');
+
+  const deduped = deduplicateLinks(
+    [oldTabUnresolved, newTabResolvedDuplicate],
+    folders
+  );
+  assert.equal(deduped.links.length, 1);
+  assert.equal(deduped.removedLinks.length, 1);
+  assert.equal(deduped.removedLinks[0].id, 'yt-new-dup-2');
+  assert.equal(deduped.links[0].id, 'yt-old-1');
+  assert.equal(deduped.links[0].title, 'How Transformers Work Visually');
+  assert.equal(deduped.links[0].channel_name, '3Blue1Brown');
+  assert.equal(deduped.links[0].video_duration, '27:14');
+
+  const consolidated = consolidateLinksAcrossGroups(
+    [oldTabUnresolved, newTabResolvedDuplicate],
+    folders
+  );
+  assert.equal(consolidated.links.length, 1);
+  assert.equal(consolidated.removedDuplicateLinks.length, 1);
+  assert.equal(consolidated.removedDuplicateLinks[0].id, 'yt-new-dup-2');
+});
+
+
+
 
 
 

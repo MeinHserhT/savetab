@@ -1,10 +1,13 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   FolderPlus,
   GripVertical,
+  Hash,
   Layers,
   PanelLeftClose,
   PanelLeftOpen,
@@ -12,26 +15,278 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { useDroppable } from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useWorkspaceDnd } from '@/components/WorkspaceDndProvider';
 import {
   COLOR_KEYS,
   getTabGroupStyles,
+  TabGroupStyleEntry,
 } from '@/components/KanbanBoard';
-import { LinkStatus, TabGroupColor } from '@/lib/types';
+import { Folder, LinkStatus, TabGroupColor } from '@/lib/types';
+import { getDescendantFolderIds } from '@/lib/kanban-rules';
 import {
   inferDefaultGroupName,
   parseTabGroupFromDataTransfer,
   pickNextTabGroupColor,
 } from '@/lib/tab-group-drop';
 
+interface SidebarFolderRowProps {
+  folder: Folder;
+  style: TabGroupStyleEntry;
+  count: number;
+  depth?: number;
+  hasChildren?: boolean;
+  isTreeExpanded?: boolean;
+  isCollapsed: boolean;
+  isSelected: boolean;
+  isNativeDropTarget: boolean;
+  isNativeDragging: boolean;
+  isEditing: boolean;
+  editingName: string;
+  isConfirmingDelete: boolean;
+  editGroupNameAria: string;
+  editGroupNameTitle: string;
+  deleteGroupAria: string;
+  deleteGroupTitle: string;
+  addSubfolderAria?: string;
+  addSubfolderTitle?: string;
+  onToggleTreeExpand?: (folderId: string) => void;
+  onStartAddSubfolder?: (parentFolderId: string) => void;
+  onFocusGroupOnBoard: (folderId: string) => void;
+  onStartEditing: (folder: Folder) => void;
+  onChangeEditingName: (val: string) => void;
+  onCommitEditing: (folderId: string) => void;
+  onCancelEditing: (folder: Folder) => void;
+  onRequestDelete: (folderId: string) => void;
+  onNativeDragStart: (e: React.DragEvent<HTMLElement>, folder: Folder) => void;
+  onNativeDragEnd: () => void;
+  onNativeDragOver: (e: React.DragEvent<HTMLElement>, folderId: string) => void;
+  onNativeDragLeave: (e: React.DragEvent<HTMLElement>) => void;
+  onNativeDrop: (e: React.DragEvent<HTMLElement>, folderId: string) => void;
+}
+
+function SidebarFolderRow({
+  folder,
+  style,
+  count,
+  depth = 0,
+  hasChildren = false,
+  isTreeExpanded = true,
+  isCollapsed,
+  isSelected,
+  isNativeDropTarget,
+  isNativeDragging,
+  isEditing,
+  editingName,
+  isConfirmingDelete,
+  editGroupNameAria,
+  editGroupNameTitle,
+  deleteGroupAria,
+  deleteGroupTitle,
+  addSubfolderAria,
+  addSubfolderTitle,
+  onToggleTreeExpand,
+  onStartAddSubfolder,
+  onFocusGroupOnBoard,
+  onStartEditing,
+  onChangeEditingName,
+  onCommitEditing,
+  onCancelEditing,
+  onRequestDelete,
+  onNativeDragStart,
+  onNativeDragEnd,
+  onNativeDragOver,
+  onNativeDragLeave,
+  onNativeDrop,
+}: SidebarFolderRowProps) {
+  const { overFolderId, activeLink } = useWorkspaceDnd();
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isOver,
+  } = useSortable({
+    id: `sidebar-folder:${folder.id}`,
+    disabled: isEditing,
+    data: {
+      type: 'sidebar-folder',
+      folderId: folder.id,
+      folder,
+    },
+  });
+
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  const isDndDropTarget =
+    Boolean(activeLink) && (overFolderId === folder.id || isOver);
+  const isDropTarget = isNativeDropTarget || isDndDropTarget;
+
+  if (isCollapsed) {
+    return (
+      <button
+        ref={setNodeRef}
+        style={sortableStyle}
+        id={`sidebar-folder-${folder.id}`}
+        type="button"
+        onClick={() => onFocusGroupOnBoard(folder.id)}
+        onDragOver={(e) => onNativeDragOver(e, folder.id)}
+        onDragLeave={onNativeDragLeave}
+        onDrop={(e) => onNativeDrop(e, folder.id)}
+        title={`${folder.name} (${count})`}
+        aria-label={folder.name}
+        className={`w-full flex items-center justify-center p-2 rounded-md transition-colors border ${
+          isDropTarget
+            ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]'
+            : isSelected
+            ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]/50'
+            : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
+        }`}
+      >
+        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dot}`} />
+      </button>
+    );
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={sortableStyle}
+      id={`sidebar-folder-${folder.id}`}
+      draggable={!isEditing}
+      onDragStart={(e) => onNativeDragStart(e, folder)}
+      onDragEnd={onNativeDragEnd}
+      onDragOver={(e) => onNativeDragOver(e, folder.id)}
+      onDragLeave={onNativeDragLeave}
+      onDrop={(e) => onNativeDrop(e, folder.id)}
+      className={`group flex items-center justify-between rounded-md transition-colors border ${
+        isDragging || isNativeDragging
+          ? 'opacity-50 border-dashed border-[var(--tf-accent)]'
+          : isDropTarget
+          ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)] text-[var(--tf-text)]'
+          : isSelected
+          ? 'bg-[var(--tf-elevated)] border-[var(--tf-border-strong)] text-[var(--tf-text)]'
+          : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
+      }`}
+    >
+      <div
+        onClick={() => onFocusGroupOnBoard(folder.id)}
+        className="flex-1 flex items-center justify-between pl-1 pr-1 py-1.5 text-xs font-medium min-w-0 cursor-pointer"
+      >
+        <span className="flex items-center gap-1 min-w-0 flex-1">
+          <span
+            {...attributes}
+            {...listeners}
+            onClick={(e) => e.stopPropagation()}
+            className="p-0.5 rounded hover:bg-[var(--tf-canvas)] shrink-0 cursor-grab active:cursor-grabbing"
+          >
+            <GripVertical className="w-3 h-3 text-[var(--tf-text-muted)] opacity-55 group-hover:opacity-100 transition-opacity" />
+          </span>
+
+          {hasChildren && onToggleTreeExpand ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleTreeExpand(folder.id);
+              }}
+              aria-label={folder.name}
+              className="p-0.5 rounded text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] shrink-0"
+            >
+              {isTreeExpanded ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronRight className="w-3 h-3" />
+              )}
+            </button>
+          ) : null}
+
+          <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
+          <input
+            type="text"
+            value={isEditing ? editingName : folder.name}
+            onFocus={() => onStartEditing(folder)}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => onChangeEditingName(e.target.value)}
+            onBlur={() => onCommitEditing(folder.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              } else if (e.key === 'Escape') {
+                onCancelEditing(folder);
+                e.currentTarget.blur();
+              }
+            }}
+            aria-label={editGroupNameAria}
+            title={editGroupNameTitle}
+            className="w-full min-w-0 bg-transparent text-xs font-medium text-inherit truncate rounded px-1 py-0.5 -mx-0.5 border border-transparent hover:border-[var(--tf-border)] focus:border-[var(--tf-accent)] focus:bg-[var(--tf-canvas)] focus:text-[var(--tf-text)] focus:outline-none transition-colors cursor-text"
+          />
+        </span>
+        <span className="font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] ml-1.5 shrink-0">
+          {count}
+        </span>
+      </div>
+
+      <div className="flex items-center shrink-0 pr-0.5">
+        {depth === 0 && onStartAddSubfolder && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartAddSubfolder(folder.id);
+            }}
+            aria-label={addSubfolderAria}
+            title={addSubfolderTitle}
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-canvas)] transition-all shrink-0"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRequestDelete(folder.id);
+          }}
+          aria-label={deleteGroupAria}
+          title={deleteGroupTitle}
+          className={`p-1 rounded transition-colors shrink-0 ${
+            isConfirmingDelete
+              ? 'text-rose-500 bg-rose-500/15'
+              : 'text-[var(--tf-text-muted)] hover:text-rose-500 hover:bg-[var(--tf-canvas)]'
+          }`}
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const {
     links,
     folders,
     activeFolderId,
+    activeTag,
     setActiveFolderId,
+    setActiveTag,
     createFolder,
     createFolderWithLinks,
     updateFolder,
@@ -43,12 +298,20 @@ export function Sidebar() {
 
   const { mode } = useThemeStore();
   const { t } = useLanguageStore();
+  const { isOverNewGroupZone } = useWorkspaceDnd();
+  const { setNodeRef: setSidebarNewGroupNodeRef, isOver: isDndOverSidebarNew } =
+    useDroppable({
+      id: 'sidebar-new-group-drop',
+      data: { type: 'new-group' },
+    });
   const groupStyles = getTabGroupStyles(mode);
 
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupParentId, setNewGroupParentId] = useState<string | null>(null);
   const [newGroupColor, setNewGroupColor] = useState<TabGroupColor>('blue');
+  const [collapsedTreeIds, setCollapsedTreeIds] = useState<Record<string, boolean>>({});
 
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -65,6 +328,41 @@ export function Sidebar() {
   const pendingDeleteTabCount = folderPendingDelete
     ? links.filter((l) => l.folder_id === folderPendingDelete.id).length
     : 0;
+
+  // Nested folder tree structure: top-level folders + children map
+  const { rootFolders, childrenByParentId } = useMemo(() => {
+    const folderIds = new Set(folders.map((f) => f.id));
+    const roots: Folder[] = [];
+    const childMap = new Map<string, Folder[]>();
+
+    for (const folder of folders) {
+      if (folder.parent_id && folderIds.has(folder.parent_id)) {
+        const list = childMap.get(folder.parent_id) ?? [];
+        list.push(folder);
+        childMap.set(folder.parent_id, list);
+      } else {
+        roots.push(folder);
+      }
+    }
+
+    return { rootFolders: roots, childrenByParentId: childMap };
+  }, [folders]);
+
+  // Extract tags & item counts for Swiss Minimalist Tag Navigation
+  const tagCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const link of links) {
+      for (const rawTag of link.tags ?? []) {
+        const tag = rawTag.trim();
+        if (!tag) continue;
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    });
+  }, [links]);
 
   useEffect(() => {
     if (!confirmDeleteFolderId) return;
@@ -93,9 +391,10 @@ export function Sidebar() {
     e.preventDefault();
     const trimmed = newGroupName.trim().slice(0, 120);
     if (!trimmed) return;
-    const created = await createFolder(trimmed, null, newGroupColor);
+    const created = await createFolder(trimmed, newGroupParentId, newGroupColor);
     if (created) {
       setNewGroupName('');
+      setNewGroupParentId(null);
       setIsAddingGroup(false);
       setActiveFolderId(created.id);
       requestAnimationFrame(() => {
@@ -208,6 +507,123 @@ export function Sidebar() {
     }
   };
 
+  const handleFocusGroupOnBoard = (folderId: string) => {
+    setActiveFolderId(folderId);
+    requestAnimationFrame(() => {
+      const colEl = document.getElementById(`tab-group-col-${folderId}`);
+      colEl?.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest',
+      });
+    });
+  };
+
+  const renderFolderNode = (folder: Folder, depth: number) => {
+    const colorKey: TabGroupColor = folder.color ?? 'blue';
+    const style = groupStyles[colorKey] ?? groupStyles.blue;
+    const isSelected = activeFolderId === folder.id;
+    const isNativeDropTarget = dragOverFolderId === folder.id;
+    const isEditing = editingFolderId === folder.id;
+    const children = childrenByParentId.get(folder.id) ?? [];
+    const hasChildren = children.length > 0;
+    const isTreeExpanded = !collapsedTreeIds[folder.id];
+    const descendantIds = hasChildren
+      ? getDescendantFolderIds(folders, folder.id)
+      : null;
+    const count = descendantIds
+      ? links.filter((l) => l.folder_id && descendantIds.has(l.folder_id)).length
+      : links.filter((l) => l.folder_id === folder.id).length;
+
+    return (
+      <div key={folder.id} className="space-y-0.5">
+        <SidebarFolderRow
+          folder={folder}
+          style={style}
+          count={count}
+          depth={depth}
+          hasChildren={hasChildren}
+          isTreeExpanded={isTreeExpanded}
+          isCollapsed={isCollapsed}
+          isSelected={isSelected}
+          isNativeDropTarget={isNativeDropTarget}
+          isNativeDragging={draggedSidebarFolderId === folder.id}
+          isEditing={isEditing}
+          editingName={editingName}
+          isConfirmingDelete={confirmDeleteFolderId === folder.id}
+          editGroupNameAria={t.sidebar.editGroupNameAria(folder.name)}
+          editGroupNameTitle={t.sidebar.editGroupNameTitle}
+          deleteGroupAria={t.sidebar.deleteGroupAria(folder.name)}
+          deleteGroupTitle={t.sidebar.deleteGroupTitle}
+          addSubfolderAria={t.sidebar.addSubfolderAria(folder.name)}
+          addSubfolderTitle={t.sidebar.addSubfolderTitle}
+          onToggleTreeExpand={(fId) =>
+            setCollapsedTreeIds((prev) => ({ ...prev, [fId]: !prev[fId] }))
+          }
+          onStartAddSubfolder={(parentId) => {
+            setIsCollapsed(false);
+            setNewGroupParentId(parentId);
+            setNewGroupColor(pickNextTabGroupColor(folders.length));
+            setIsAddingGroup(true);
+          }}
+          onFocusGroupOnBoard={handleFocusGroupOnBoard}
+          onStartEditing={(f) => {
+            handleFocusGroupOnBoard(f.id);
+            setEditingFolderId(f.id);
+            setEditingName(f.name);
+          }}
+          onChangeEditingName={setEditingName}
+          onCommitEditing={commitEditingFolder}
+          onCancelEditing={(f) => {
+            setEditingFolderId(null);
+            setEditingName(f.name);
+          }}
+          onRequestDelete={setConfirmDeleteFolderId}
+          onNativeDragStart={(e, f) => {
+            const target = e.target as HTMLElement | null;
+            if (
+              isEditing ||
+              (target &&
+                (target.tagName === 'INPUT' || target.closest('button')))
+            ) {
+              e.preventDefault();
+              return;
+            }
+            setDraggedSidebarFolderId(f.id);
+            e.dataTransfer.setData('application/x-tabflow-folder-id', f.id);
+            e.dataTransfer.setData('text/plain', f.id);
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          onNativeDragEnd={() => {
+            setDraggedSidebarFolderId(null);
+            setDragOverFolderId(null);
+          }}
+          onNativeDragOver={(e, fId) => {
+            e.preventDefault();
+            if (dragOverFolderId !== fId) {
+              setDragOverFolderId(fId);
+            }
+          }}
+          onNativeDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setDragOverFolderId(null);
+            }
+          }}
+          onNativeDrop={handleDropOnSidebarGroup}
+        />
+
+        {!isCollapsed && hasChildren && isTreeExpanded && (
+          <div
+            data-testid={`sidebar-subfolder-tree-${folder.id}`}
+            className="ml-3.5 pl-2 border-l border-[var(--tf-border)] space-y-0.5"
+          >
+            {children.map((child) => renderFolderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {!isCollapsed && (
@@ -222,7 +638,7 @@ export function Sidebar() {
         className={`${
           isCollapsed
             ? 'w-11 sm:w-12'
-            : 'max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-2xl w-[190px] md:w-[180px] lg:w-[196px] xl:w-[208px]'
+            : 'max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:shadow-2xl w-[200px] md:w-[196px] lg:w-[212px] xl:w-[224px]'
         } h-full shrink-0 border-r border-[var(--tf-border)] bg-[var(--tf-surface)] flex flex-col justify-between select-none transition-all duration-200 ease-in-out overflow-hidden`}
       >
         <div
@@ -246,6 +662,7 @@ export function Sidebar() {
                   type="button"
                   onClick={() => {
                     setIsCollapsed(false);
+                    setNewGroupParentId(null);
                     setIsAddingGroup(true);
                   }}
                   aria-label={t.sidebar.newGroup}
@@ -256,43 +673,54 @@ export function Sidebar() {
                 </button>
               </div>
             ) : (
-              <div className="px-2 pb-1 flex items-center justify-between gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsAddingGroup((prev) => !prev)}
-                  aria-label={t.sidebar.newGroup}
-                  className="inline-flex items-center gap-1 text-xs text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] transition-colors rounded px-1.5 py-0.5 whitespace-nowrap shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{t.sidebar.newGroup}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsCollapsed(true)}
-                  aria-label={t.sidebar.collapseSidebar}
-                  title={t.sidebar.collapseSidebar}
-                  className="p-1 rounded text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)] transition-colors shrink-0"
-                >
-                  <PanelLeftClose className="w-3.5 h-3.5" />
-                </button>
+              <div className="px-1.5 pb-1 flex items-center justify-between gap-1 shrink-0 border-b border-[var(--tf-border)]">
+                <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[var(--tf-text-muted)]">
+                  {t.sidebar.foldersSectionTitle}
+                </span>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewGroupParentId(null);
+                      setIsAddingGroup((prev) => !prev);
+                    }}
+                    aria-label={t.sidebar.newGroup}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] transition-colors rounded px-1.5 py-0.5 whitespace-nowrap shrink-0"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{t.sidebar.newGroup}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed(true)}
+                    aria-label={t.sidebar.collapseSidebar}
+                    title={t.sidebar.collapseSidebar}
+                    className="p-1 rounded text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)] transition-colors shrink-0"
+                  >
+                    <PanelLeftClose className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
 
             {!isCollapsed && isAddingGroup && (
               <form
                 onSubmit={handleCreateGroup}
-                className="p-2.5 mb-2 rounded-md border border-[var(--tf-border)] bg-[var(--tf-elevated)] space-y-2.5"
+                className="p-2.5 mb-1.5 rounded-md border border-[var(--tf-border)] bg-[var(--tf-elevated)] space-y-2"
               >
                 <div className="flex items-center justify-between">
                   <label
                     htmlFor="sidebar-group-name"
-                    className="text-xs font-medium text-[var(--tf-text)]"
+                    className="text-[11px] font-medium text-[var(--tf-text)]"
                   >
                     {t.sidebar.groupNameLabel}
                   </label>
                   <button
                     type="button"
-                    onClick={() => setIsAddingGroup(false)}
+                    onClick={() => {
+                      setIsAddingGroup(false);
+                      setNewGroupParentId(null);
+                    }}
                     aria-label={t.sidebar.cancelNewGroup}
                     className="text-[var(--tf-text-muted)] hover:text-[var(--tf-text)]"
                   >
@@ -307,8 +735,33 @@ export function Sidebar() {
                   onChange={(e) => setNewGroupName(e.target.value)}
                   placeholder={t.sidebar.groupNamePlaceholder}
                   required
-                  className="w-full px-2.5 py-1.5 text-xs bg-[var(--tf-canvas)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
+                  className="w-full px-2 py-1.5 text-xs bg-[var(--tf-canvas)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
                 />
+                {rootFolders.length > 0 && (
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="sidebar-parent-folder"
+                      className="block text-[10px] font-mono uppercase tracking-wider text-[var(--tf-text-muted)]"
+                    >
+                      {t.sidebar.parentGroupLabel}
+                    </label>
+                    <select
+                      id="sidebar-parent-folder"
+                      value={newGroupParentId ?? ''}
+                      onChange={(e) =>
+                        setNewGroupParentId(e.target.value || null)
+                      }
+                      className="w-full px-2 py-1 text-xs bg-[var(--tf-canvas)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] focus:outline-none focus:border-[var(--tf-accent)]"
+                    >
+                      <option value="">{t.sidebar.topLevelGroupOption}</option>
+                      {rootFolders.map((rf) => (
+                        <option key={rf.id} value={rf.id}>
+                          {rf.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-1.5">
                   {COLOR_KEYS.map((cKey) => (
                     <button
@@ -336,12 +789,15 @@ export function Sidebar() {
 
             <button
               type="button"
-              onClick={() => setActiveFolderId(null)}
+              onClick={() => {
+                setActiveFolderId(null);
+                setActiveTag(null);
+              }}
               title={t.sidebar.allSavedTabs}
               className={`w-full shrink-0 flex items-center ${
-                isCollapsed ? 'justify-center p-2' : 'justify-between px-2.5 py-2'
+                isCollapsed ? 'justify-center p-2' : 'justify-between px-2 py-1.5'
               } rounded-md text-xs font-medium transition-colors ${
-                activeFolderId === null
+                activeFolderId === null && activeTag === null
                   ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
                   : 'text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)] border border-transparent'
               }`}
@@ -353,183 +809,25 @@ export function Sidebar() {
                 )}
               </span>
               {!isCollapsed && (
-                <span className="font-mono text-[11px] tabular-nums text-[var(--tf-text-muted)] ml-2">
+                <span className="font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] ml-2">
                   {links.length}
                 </span>
               )}
             </button>
 
-            <div className="flex-1 min-h-0 overflow-y-auto space-y-0.5 pt-1 pr-0.5">
-              {folders.map((folder) => {
-                const colorKey: TabGroupColor = folder.color ?? 'blue';
-                const style = groupStyles[colorKey] ?? groupStyles.blue;
-                const isSelected = activeFolderId === folder.id;
-                const isDropTarget = dragOverFolderId === folder.id;
-                const isEditing = editingFolderId === folder.id;
-                const count = links.filter((l) => l.folder_id === folder.id).length;
-
-                const handleFocusGroupOnBoard = (folderId: string) => {
-                  setActiveFolderId(folderId);
-                  requestAnimationFrame(() => {
-                    const colEl = document.getElementById(
-                      `tab-group-col-${folderId}`
-                    );
-                    colEl?.scrollIntoView({
-                      behavior: 'smooth',
-                      inline: 'center',
-                      block: 'nearest',
-                    });
-                  });
-                };
-
-                if (isCollapsed) {
-                  return (
-                    <button
-                      key={folder.id}
-                      id={`sidebar-folder-${folder.id}`}
-                      type="button"
-                      onClick={() => handleFocusGroupOnBoard(folder.id)}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        if (dragOverFolderId !== folder.id) {
-                          setDragOverFolderId(folder.id);
-                        }
-                      }}
-                      onDragLeave={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                          setDragOverFolderId(null);
-                        }
-                      }}
-                      onDrop={(e) => handleDropOnSidebarGroup(e, folder.id)}
-                      title={`${folder.name} (${count})`}
-                      aria-label={folder.name}
-                      className={`w-full flex items-center justify-center p-2 rounded-md transition-colors border ${
-                        isDropTarget
-                          ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)]'
-                          : isSelected
-                          ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]/50'
-                          : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
-                      }`}
-                    >
-                      <span
-                        className={`w-3 h-3 rounded-full shrink-0 ${style.dot}`}
-                      />
-                    </button>
-                  );
-                }
-
-                return (
-                  <div
-                    key={folder.id}
-                    id={`sidebar-folder-${folder.id}`}
-                    draggable={!isEditing}
-                    onDragStart={(e) => {
-                      const target = e.target as HTMLElement | null;
-                      if (
-                        isEditing ||
-                        (target &&
-                          (target.tagName === 'INPUT' ||
-                            target.closest('button')))
-                      ) {
-                        e.preventDefault();
-                        return;
-                      }
-                      setDraggedSidebarFolderId(folder.id);
-                      e.dataTransfer.setData(
-                        'application/x-tabflow-folder-id',
-                        folder.id
-                      );
-                      e.dataTransfer.setData('text/plain', folder.id);
-                      e.dataTransfer.effectAllowed = 'move';
-                    }}
-                    onDragEnd={() => {
-                      setDraggedSidebarFolderId(null);
-                      setDragOverFolderId(null);
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (dragOverFolderId !== folder.id) {
-                        setDragOverFolderId(folder.id);
-                      }
-                    }}
-                    onDragLeave={(e) => {
-                      if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                        setDragOverFolderId(null);
-                      }
-                    }}
-                    onDrop={(e) => handleDropOnSidebarGroup(e, folder.id)}
-                    className={`group flex items-center justify-between rounded-md transition-colors border ${
-                      draggedSidebarFolderId === folder.id
-                        ? 'opacity-50 border-dashed border-[var(--tf-accent)]'
-                        : isDropTarget
-                        ? 'bg-[var(--tf-accent-soft)] border-[var(--tf-accent)] text-[var(--tf-text)]'
-                        : isSelected
-                        ? 'bg-[var(--tf-elevated)] border-[var(--tf-accent)] ring-1 ring-[var(--tf-accent)]/40 text-[var(--tf-text)]'
-                        : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
-                    }`}
-                  >
-                    <div
-                      onClick={() => handleFocusGroupOnBoard(folder.id)}
-                      className="flex-1 flex items-center justify-between pl-1.5 pr-1.5 py-1.5 text-xs font-medium min-w-0 cursor-pointer"
-                    >
-                      <span className="flex items-center gap-1.5 min-w-0 flex-1">
-                        <GripVertical className="w-3 h-3 shrink-0 text-[var(--tf-text-muted)] opacity-60 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing" />
-                        <span
-                          className={`w-2.5 h-2.5 rounded-full shrink-0 ${style.dot}`}
-                        />
-                        <input
-                          type="text"
-                          value={isEditing ? editingName : folder.name}
-                          onFocus={() => {
-                            handleFocusGroupOnBoard(folder.id);
-                            setEditingFolderId(folder.id);
-                            setEditingName(folder.name);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onBlur={() => commitEditingFolder(folder.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              e.currentTarget.blur();
-                            } else if (e.key === 'Escape') {
-                              setEditingFolderId(null);
-                              setEditingName(folder.name);
-                              e.currentTarget.blur();
-                            }
-                          }}
-                          aria-label={t.sidebar.editGroupNameAria(folder.name)}
-                          title={t.sidebar.editGroupNameTitle}
-                          className="w-full min-w-0 bg-transparent text-xs font-medium text-inherit truncate rounded px-1 py-0.5 -mx-1 border border-transparent hover:border-[var(--tf-border)] focus:border-[var(--tf-accent)] focus:bg-[var(--tf-canvas)] focus:text-[var(--tf-text)] focus:outline-none transition-colors cursor-text"
-                        />
-                      </span>
-                      <span className="font-mono text-[11px] tabular-nums text-[var(--tf-text-muted)] ml-2 shrink-0">
-                        {count}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setConfirmDeleteFolderId(folder.id);
-                      }}
-                      aria-label={t.sidebar.deleteGroupAria(folder.name)}
-                      title={t.sidebar.deleteGroupTitle}
-                      className={`p-1.5 mr-1 rounded transition-colors shrink-0 ${
-                        confirmDeleteFolderId === folder.id
-                          ? 'text-rose-500 bg-rose-500/15'
-                          : 'text-[var(--tf-text-muted)] hover:text-rose-500 hover:bg-[var(--tf-canvas)]'
-                      }`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pt-0.5 pr-0.5">
+              <SortableContext
+                items={folders.map((f) => `sidebar-folder:${f.id}`)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-0.5">
+                  {rootFolders.map((folder) => renderFolderNode(folder, 0))}
+                </div>
+              </SortableContext>
 
               {/* Drop Target to Create a New Tab Group in Sidebar */}
               <div
+                ref={setSidebarNewGroupNodeRef}
                 data-testid="sidebar-drop-new-group"
                 title={t.sidebar.dropNewGroupCollapsedTitle}
                 onDragOver={(e) => {
@@ -548,27 +846,83 @@ export function Sidebar() {
                 onDrop={handleDropToCreateSidebarGroup}
                 onClick={() => {
                   setIsCollapsed(false);
+                  setNewGroupParentId(null);
                   setIsAddingGroup(true);
                 }}
-                className={`mt-2 rounded-md border border-dashed transition-colors cursor-pointer ${
+                className={`rounded-md border border-dashed transition-colors cursor-pointer ${
                   isCollapsed
                     ? 'p-2 flex items-center justify-center'
-                    : 'px-2.5 py-2 flex items-center gap-2 text-[11px] font-medium'
+                    : 'px-2.5 py-1.5 flex items-center gap-2 text-[11px] font-medium'
                 } ${
-                  dragOverFolderId === '__sidebar_new_group__'
-                    ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] text-[var(--tf-text)]'
+                  dragOverFolderId === '__sidebar_new_group__' ||
+                  isDndOverSidebarNew ||
+                  isOverNewGroupZone
+                    ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] text-[var(--tf-text)] ring-1 ring-[var(--tf-accent)]'
                     : 'border-[var(--tf-border)] text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] hover:border-[var(--tf-border-strong)] hover:bg-[var(--tf-elevated)]/60'
                 }`}
               >
                 <FolderPlus className="w-3.5 h-3.5 shrink-0 text-[var(--tf-accent)]" />
                 {!isCollapsed && (
                   <span className="truncate">
-                    {dragOverFolderId === '__sidebar_new_group__'
+                    {dragOverFolderId === '__sidebar_new_group__' ||
+                    isDndOverSidebarNew ||
+                    isOverNewGroupZone
                       ? t.sidebar.dropNewGroupActive
                       : t.sidebar.dropNewGroupLabel}
                   </span>
                 )}
               </div>
+
+              {/* Swiss Minimalist Tag Navigation Section */}
+              {!isCollapsed && tagCounts.length > 0 && (
+                <div
+                  data-testid="sidebar-tag-navigation"
+                  className="pt-2 border-t border-[var(--tf-border)] space-y-1"
+                >
+                  <div className="px-1.5 flex items-center justify-between">
+                    <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[var(--tf-text-muted)]">
+                      {t.sidebar.tagsSectionTitle}
+                    </span>
+                    {activeTag && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTag(null)}
+                        className="text-[10px] font-mono text-[var(--tf-accent-text)] hover:underline"
+                      >
+                        {t.sidebar.clearTagFilter}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-0.5">
+                    {tagCounts.map(([tag, count]) => {
+                      const isTagSelected = activeTag === tag;
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() =>
+                            setActiveTag(isTagSelected ? null : tag)
+                          }
+                          className={`w-full flex items-center justify-between px-2 py-1 rounded text-xs transition-colors border ${
+                            isTagSelected
+                              ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-border-strong)] font-medium'
+                              : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5 min-w-0 truncate">
+                            <Hash className="w-3 h-3 shrink-0 text-[var(--tf-text-muted)]" />
+                            <span className="truncate">{tag}</span>
+                          </span>
+                          <span className="font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] ml-2 shrink-0">
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

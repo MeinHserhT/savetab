@@ -2,7 +2,15 @@
 
 import { create } from 'zustand';
 import { Folder, LinkItem, LinkStatus, TabGroupColor } from '@/lib/types';
-import { moveAndReorderGroupLinks } from '@/lib/kanban-rules';
+import {
+  consolidateLinksAcrossGroups,
+  ConsolidateLinksResult,
+  findDuplicateLinkByUrl,
+  findExistingGroupForLinkSource,
+  moveAndReorderGroupLinks,
+  normalizeLinkSourceDomain,
+  resolveYouTubeChannelFromLink,
+} from '@/lib/kanban-rules';
 import {
   getOrCreateClientUserId,
   setAuthenticatedClientUserId,
@@ -31,6 +39,15 @@ export interface AuthUserSummary {
   isAnonymous?: boolean;
 }
 
+export interface WorkspaceNotice {
+  id: string;
+  kind: 'duplicate-removed' | 'same-website-grouped' | 'old-duplicates-cleaned';
+  sourceLabel: string;
+  groupName: string;
+  folderId?: string | null;
+  removedCount?: number;
+}
+
 interface CreateLinkPayload {
   url: string;
   folder_id: string | null;
@@ -53,6 +70,7 @@ function getUserHeaders(includeJsonContentType = false): Record<string, string> 
 }
 
 let activeFirestoreUnsubscribe: (() => void) | null = null;
+const manuallyMovedLinkIds = new Set<string>();
 
 const VIDEO_META_STORAGE_KEY = 'tabflow_video_meta_v1';
 
@@ -165,6 +183,97 @@ function mergeCachedVideoDuration(
   });
 }
 
+async function persistConsolidatedState(
+  consolidated: ConsolidateLinksResult,
+  authUser: AuthUserSummary | null
+): Promise<void> {
+  const {
+    links: consolidatedLinks,
+    movedLinks,
+    removedDuplicateLinks,
+    updatedKeptLinks,
+  } = consolidated;
+
+  if (
+    movedLinks.length === 0 &&
+    removedDuplicateLinks.length === 0 &&
+    updatedKeptLinks.length === 0
+  ) {
+    return;
+  }
+
+  // 1. Delete any removed duplicate tabs (old or new) from Firestore and local API
+  if (removedDuplicateLinks.length > 0) {
+    await Promise.all(
+      removedDuplicateLinks.map(async (dup) => {
+        manuallyMovedLinkIds.delete(dup.id);
+        if (authUser && canSyncWithFirestore(authUser)) {
+          try {
+            await deleteLinkInFirestore(dup.id);
+          } catch {
+            // Ignore transient cloud delete errors
+          }
+        }
+        try {
+          await fetch(`/api/links/${encodeURIComponent(dup.id)}`, {
+            method: 'DELETE',
+            credentials: 'same-origin',
+            headers: getUserHeaders(false),
+          });
+        } catch {
+          // Ignore transient local delete errors
+        }
+      })
+    );
+  }
+
+  // 2. Update any kept links that absorbed metadata or moved groups
+  const byId = new Map(consolidatedLinks.map((item) => [item.id, item]));
+  const idsToUpdate = new Set<string>([
+    ...movedLinks.map((m) => m.linkId),
+    ...updatedKeptLinks.map((u) => u.id),
+  ]);
+
+  await Promise.all(
+    Array.from(idsToUpdate).map(async (linkId) => {
+      const updatedItem = byId.get(linkId);
+      if (!updatedItem) return;
+
+      if (authUser && canSyncWithFirestore(authUser) && updatedItem.folder_id) {
+        try {
+          await updateLinkInFirestore(linkId, {
+            title: updatedItem.title,
+            description: updatedItem.description,
+            folder_id: updatedItem.folder_id,
+            order_index: updatedItem.order_index,
+          });
+        } catch {
+          // Ignore transient cloud sync errors during auto-consolidation
+        }
+      }
+
+      try {
+        await fetch(`/api/links/${encodeURIComponent(linkId)}`, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: getUserHeaders(true),
+          body: JSON.stringify({
+            title: updatedItem.title,
+            description: updatedItem.description,
+            folder_id: updatedItem.folder_id,
+            order_index: updatedItem.order_index,
+            channel_name: updatedItem.channel_name,
+            video_duration: updatedItem.video_duration,
+            image_url: updatedItem.image_url,
+          }),
+        });
+      } catch {
+        // Ignore transient local API errors during auto-consolidation
+      }
+    })
+  );
+}
+
 interface LinkStoreState {
   userId: string;
   authUser: AuthUserSummary | null;
@@ -173,17 +282,25 @@ interface LinkStoreState {
   links: LinkItem[];
   folders: Folder[];
   activeFolderId: string | null;
+  activeTag: string | null;
+  cardDensity: 'rich' | 'compact';
   newlyCreatedGroupId: string | null;
   isImportingGroup: boolean;
   isLoading: boolean;
   isScraping: boolean;
   errorMessage: string | null;
+  workspaceNotice: string | null extends never ? WorkspaceNotice | null : WorkspaceNotice | null;
+  highlightedLinkId: string | null;
 
   fetchInitialData: () => Promise<void>;
   syncAuthUser: (user: AuthUserSummary | null) => Promise<void>;
   setActiveFolderId: (folderId: string | null) => void;
+  setActiveTag: (tag: string | null) => void;
+  setCardDensity: (density: 'rich' | 'compact') => void;
   clearNewlyCreatedGroupId: () => void;
   clearError: () => void;
+  clearNotice: () => void;
+  clearHighlightedLinkId: () => void;
 
   addLink: (payload: CreateLinkPayload) => Promise<LinkItem | null>;
   updateLink: (
@@ -224,7 +341,7 @@ interface LinkStoreState {
   }) => Promise<Folder | null>;
   updateFolder: (
     id: string,
-    patch: Partial<Pick<Folder, 'name' | 'color' | 'collapsed' | 'order_index'>>
+    patch: Partial<Pick<Folder, 'name' | 'color' | 'collapsed' | 'order_index' | 'parent_id'>>
   ) => Promise<void>;
   reorderFolders: (
     sourceFolderId: string,
@@ -242,11 +359,15 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   links: [],
   folders: [],
   activeFolderId: null,
+  activeTag: null,
+  cardDensity: 'rich',
   newlyCreatedGroupId: null,
   isImportingGroup: false,
   isLoading: true,
   isScraping: false,
   errorMessage: null,
+  workspaceNotice: null,
+  highlightedLinkId: null,
 
   fetchInitialData: async () => {
     const uid = getOrCreateClientUserId();
@@ -261,12 +382,41 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         throw new Error('Failed to load workspace data.');
       }
       const data = await response.json();
-      set({
+      const loadedFolders: Folder[] = data.folders ?? [];
+      const mergedLinks = mergeCachedVideoDuration(
+        data.links ?? [],
+        get().links
+      );
+      const consolidated = consolidateLinksAcrossGroups(
+        mergedLinks,
+        loadedFolders,
+        manuallyMovedLinkIds
+      );
+
+      set((state) => ({
         userId: data.user?.id ?? uid,
-        links: mergeCachedVideoDuration(data.links ?? [], get().links),
-        folders: data.folders ?? [],
+        links: consolidated.links,
+        folders: loadedFolders,
         isLoading: false,
-      });
+        workspaceNotice:
+          consolidated.removedDuplicateLinks.length > 0 && !state.workspaceNotice
+            ? {
+                id: `notice-${Date.now()}`,
+                kind: 'old-duplicates-cleaned',
+                sourceLabel: '',
+                groupName: '',
+                removedCount: consolidated.removedDuplicateLinks.length,
+              }
+            : state.workspaceNotice,
+      }));
+
+      if (
+        consolidated.movedLinks.length > 0 ||
+        consolidated.removedDuplicateLinks.length > 0 ||
+        consolidated.updatedKeptLinks.length > 0
+      ) {
+        void persistConsolidatedState(consolidated, null);
+      }
     } catch (error) {
       set({
         isLoading: false,
@@ -321,14 +471,65 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         activeFirestoreUnsubscribe = subscribeToUserWorkspace(
           user.uid,
           (cloudFolders) => {
-            set({ folders: cloudFolders, isCloudSynced: true });
+            const consolidated = consolidateLinksAcrossGroups(
+              get().links,
+              cloudFolders,
+              manuallyMovedLinkIds
+            );
+            set((state) => ({
+              folders: cloudFolders,
+              links: consolidated.links,
+              isCloudSynced: true,
+              workspaceNotice:
+                consolidated.removedDuplicateLinks.length > 0 &&
+                !state.workspaceNotice
+                  ? {
+                      id: `notice-${Date.now()}`,
+                      kind: 'old-duplicates-cleaned',
+                      sourceLabel: '',
+                      groupName: '',
+                      removedCount: consolidated.removedDuplicateLinks.length,
+                    }
+                  : state.workspaceNotice,
+            }));
+            if (
+              consolidated.movedLinks.length > 0 ||
+              consolidated.removedDuplicateLinks.length > 0 ||
+              consolidated.updatedKeptLinks.length > 0
+            ) {
+              void persistConsolidatedState(consolidated, get().authUser);
+            }
           },
           (cloudLinks) => {
-            set({
-              links: mergeCachedVideoDuration(cloudLinks, get().links),
+            const merged = mergeCachedVideoDuration(cloudLinks, get().links);
+            const consolidated = consolidateLinksAcrossGroups(
+              merged,
+              get().folders,
+              manuallyMovedLinkIds
+            );
+            set((state) => ({
+              links: consolidated.links,
               isCloudSynced: true,
               isLoading: false,
-            });
+              workspaceNotice:
+                consolidated.removedDuplicateLinks.length > 0 &&
+                !state.workspaceNotice
+                  ? {
+                      id: `notice-${Date.now()}`,
+                      kind: 'old-duplicates-cleaned',
+                      sourceLabel: '',
+                      groupName: '',
+                      removedCount: consolidated.removedDuplicateLinks.length,
+                    }
+                  : state.workspaceNotice,
+            }));
+            if (
+              consolidated.movedLinks.length > 0 ||
+              consolidated.removedDuplicateLinks.length > 0 ||
+              consolidated.updatedKeptLinks.length > 0
+            ) {
+              void persistConsolidatedState(consolidated, get().authUser);
+            }
           }
         );
       } catch (error) {
@@ -341,22 +542,181 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   },
 
   setActiveFolderId: (folderId) => set({ activeFolderId: folderId }),
+  setActiveTag: (tag) => set({ activeTag: tag }),
+  setCardDensity: (density) => set({ cardDensity: density }),
   clearNewlyCreatedGroupId: () => set({ newlyCreatedGroupId: null }),
   clearError: () => set({ errorMessage: null }),
+  clearNotice: () => set({ workspaceNotice: null, highlightedLinkId: null }),
+  clearHighlightedLinkId: () => set({ highlightedLinkId: null }),
 
   addLink: async (payload) => {
     set({ isScraping: true, errorMessage: null });
-    try {
-      const response = await fetch('/api/links', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: getUserHeaders(true),
-        body: JSON.stringify(payload),
+    const previousLinks = get().links;
+    const previousFolders = get().folders;
+    const preExistingDuplicate = findDuplicateLinkByUrl(
+      payload.url,
+      previousLinks,
+      previousFolders
+    );
+
+    // Immediately show the duplicate alert banner/toast if we already know this URL exists in the workspace
+    if (preExistingDuplicate) {
+      const immediateConsolidated = consolidateLinksAcrossGroups(
+        previousLinks,
+        previousFolders,
+        manuallyMovedLinkIds
+      );
+      const immediateKept =
+        immediateConsolidated.links.find(
+          (item) => item.id === preExistingDuplicate.id
+        ) ?? preExistingDuplicate;
+      const immediateGroupName =
+        previousFolders.find((f) => f.id === immediateKept.folder_id)?.name ||
+        'Tab đã lưu';
+      const immediateSourceLabel =
+        immediateKept.title ||
+        resolveYouTubeChannelFromLink(immediateKept) ||
+        normalizeLinkSourceDomain(immediateKept);
+
+      set({
+        links: immediateConsolidated.links,
+        isScraping: false,
+        highlightedLinkId: immediateKept.id,
+        workspaceNotice: {
+          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: 'duplicate-removed',
+          sourceLabel: immediateSourceLabel,
+          groupName: immediateGroupName,
+          folderId: immediateKept.folder_id,
+        },
       });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to save link.');
+
+      if (
+        immediateConsolidated.movedLinks.length > 0 ||
+        immediateConsolidated.removedDuplicateLinks.length > 0 ||
+        immediateConsolidated.updatedKeptLinks.length > 0
+      ) {
+        void persistConsolidatedState(immediateConsolidated, get().authUser);
       }
+
+      const lowerTitle = (immediateKept.title || '').trim().toLowerCase();
+      const needsMetadataEnrichment =
+        !lowerTitle ||
+        lowerTitle === 'youtube' ||
+        lowerTitle === '- youtube' ||
+        lowerTitle === 'watch - youtube' ||
+        lowerTitle.startsWith('youtube clip (');
+
+      if (!needsMetadataEnrichment) {
+        return immediateKept;
+      }
+    }
+
+    try {
+      const normalizedPayloadFolderId =
+        payload.folder_id && payload.folder_id !== '__ungrouped__'
+          ? payload.folder_id
+          : null;
+
+      let data: {
+        link?: LinkItem;
+        folders?: Folder[];
+        links?: LinkItem[];
+        duplicateOfLinkId?: string | null;
+        error?: string;
+      } = {};
+      let responseOk = false;
+
+      try {
+        const response = await fetch('/api/links', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: getUserHeaders(true),
+          body: JSON.stringify({
+            ...payload,
+            folder_id: normalizedPayloadFolderId,
+          }),
+        });
+        responseOk = response.ok;
+        const rawText = await response.text();
+        if (rawText) {
+          data = JSON.parse(rawText);
+        }
+      } catch {
+        responseOk = false;
+      }
+
+      if (!responseOk || !data.link) {
+        if (preExistingDuplicate) {
+          set({ isScraping: false, errorMessage: null });
+          return preExistingDuplicate;
+        }
+        // Build a deterministic fallback LinkItem when the URL is valid so adding YouTube/web links never fails
+        let parsedFallbackUrl: URL;
+        try {
+          const trimmedRaw = payload.url.trim();
+          const withProto = /^https?:\/\//i.test(trimmedRaw)
+            ? trimmedRaw
+            : `https://${trimmedRaw}`;
+          parsedFallbackUrl = new URL(withProto);
+        } catch {
+          throw new Error(data.error || 'URL không hợp lệ. Vui lòng kiểm tra lại đường dẫn.');
+        }
+
+        const fallbackDomain = parsedFallbackUrl.hostname.replace(/^www\./i, '');
+        let ytId: string | null = null;
+        if (
+          fallbackDomain === 'youtube.com' ||
+          fallbackDomain === 'm.youtube.com' ||
+          fallbackDomain === 'music.youtube.com'
+        ) {
+          ytId =
+            parsedFallbackUrl.searchParams.get('v') ||
+            parsedFallbackUrl.pathname.match(/\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{6,})/)?.[1] ||
+            null;
+        } else if (fallbackDomain === 'youtu.be') {
+          ytId = parsedFallbackUrl.pathname.replace(/^\/+/, '').split('/')[0] || null;
+        }
+        const fallbackFolder =
+          normalizedPayloadFolderId ||
+          get().folders[0]?.id ||
+          `fld-${Date.now()}`;
+
+        data.link = {
+          id: `lnk-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          user_id: get().authUser?.uid || 'usr-local',
+          folder_id: fallbackFolder,
+          url: parsedFallbackUrl.toString(),
+          domain: fallbackDomain,
+          title:
+            payload.title?.trim() ||
+            (ytId ? `YouTube Video (${ytId})` : fallbackDomain),
+          description:
+            payload.description?.trim() ||
+            (ytId
+              ? `YouTube video clip (https://www.youtube.com/watch?v=${ytId}).`
+              : `Saved link from ${fallbackDomain}.`),
+          image_url:
+            payload.image_url !== undefined
+              ? payload.image_url
+              : ytId
+              ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`
+              : null,
+          favicon: ytId
+            ? 'https://www.youtube.com/favicon.ico'
+            : `https://www.google.com/s2/favicons?domain=${encodeURIComponent(fallbackDomain)}&sz=64`,
+          status: payload.status ?? LinkStatus.UNREAD,
+          tags: Array.isArray(payload.tags) ? payload.tags : [],
+          reading_minutes: 5,
+          video_duration: null,
+          channel_name: null,
+          order_index: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          scrape_status: 'ok',
+        };
+      }
+
       const createdLink = data.link as LinkItem;
       if (createdLink.video_duration || createdLink.channel_name) {
         writeVideoMetaCache(createdLink.id, createdLink.url, {
@@ -371,56 +731,243 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       const serverFolders: Folder[] = Array.isArray(data.folders)
         ? data.folders
         : currentFolders;
-      const fallbackFolderId =
-        payload.folder_id ||
+      const effectiveFolders =
+        currentFolders.length > 0 ? currentFolders : serverFolders;
+
+      const matchedDuplicate =
+        preExistingDuplicate ??
+        findDuplicateLinkByUrl(
+          createdLink.url,
+          previousLinks,
+          effectiveFolders
+        ) ??
+        (data.duplicateOfLinkId
+          ? previousLinks.find((item) => item.id === data.duplicateOfLinkId) ??
+            createdLink
+          : null);
+
+      // Case 1: The user added a tab with the exact same URL as an existing tab
+      if (matchedDuplicate) {
+        const wasTransientCreatedId = createdLink.id !== matchedDuplicate.id;
+        if (wasTransientCreatedId) {
+          try {
+            await fetch(`/api/links/${encodeURIComponent(createdLink.id)}`, {
+              method: 'DELETE',
+              credentials: 'same-origin',
+              headers: getUserHeaders(false),
+            });
+          } catch {
+            // Ignore local cleanup error
+          }
+        }
+
+        const combinedWithNewMeta = [
+          ...previousLinks,
+          ...(previousLinks.some((item) => item.id === createdLink.id)
+            ? []
+            : [createdLink]),
+        ];
+        const mergedLinks = mergeCachedVideoDuration(
+          combinedWithNewMeta,
+          previousLinks
+        );
+        const consolidated = consolidateLinksAcrossGroups(
+          mergedLinks,
+          effectiveFolders,
+          manuallyMovedLinkIds
+        );
+
+        const keptLink =
+          consolidated.links.find((item) => item.id === matchedDuplicate.id) ??
+          consolidated.links.find((item) => item.id === createdLink.id) ??
+          matchedDuplicate;
+
+        const groupName =
+          effectiveFolders.find((f) => f.id === keptLink.folder_id)?.name ||
+          'Tab đã lưu';
+        const sourceLabel =
+          keptLink.title ||
+          resolveYouTubeChannelFromLink(keptLink) ||
+          normalizeLinkSourceDomain(keptLink);
+
+        set({
+          folders:
+            !get().isCloudSynced && serverFolders.length > 0
+              ? serverFolders
+              : currentFolders.length === 0 && serverFolders.length > 0
+              ? serverFolders
+              : get().folders,
+          links: consolidated.links,
+          isScraping: false,
+          errorMessage: null,
+          highlightedLinkId: keptLink.id,
+          workspaceNotice: {
+            id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            kind: 'duplicate-removed',
+            sourceLabel,
+            groupName,
+            folderId: keptLink.folder_id,
+          },
+        });
+
+        const consolidatedForPersist: ConsolidateLinksResult =
+          wasTransientCreatedId
+            ? {
+                ...consolidated,
+                removedDuplicateLinks:
+                  consolidated.removedDuplicateLinks.filter(
+                    (dup) => dup.id !== createdLink.id
+                  ),
+              }
+            : consolidated;
+
+        void persistConsolidatedState(consolidatedForPersist, authUser);
+        return keptLink;
+      }
+
+      // Case 2: Check if an existing group already has a tab from the same YouTube channel or website domain
+      const matchedExistingFolderId = findExistingGroupForLinkSource(
+        createdLink,
+        previousLinks,
+        effectiveFolders,
+        createdLink.id
+      );
+
+      const rawFallbackFolderId =
+        matchedExistingFolderId ||
+        normalizedPayloadFolderId ||
         currentFolders[0]?.id ||
         createdLink.folder_id ||
         serverFolders[0]?.id ||
         `fld-${Date.now()}`;
 
-      if (authUser && canSyncWithFirestore(authUser)) {
-        const folderExistsInState = currentFolders.some(
-          (f) => f.id === fallbackFolderId
-        );
-        if (!folderExistsInState) {
-          const matchedServerFolder = serverFolders.find(
-            (f) => f.id === fallbackFolderId
-          ) ?? {
-            id: fallbackFolderId,
-            user_id: authUser.uid,
-            name: 'Tab đã lưu',
-            parent_id: null,
-            order_index: 0,
-            color: 'blue' as const,
-            collapsed: false,
-          };
-          await createFolderInFirestore(authUser.uid, matchedServerFolder);
-        }
+      const fallbackFolderId =
+        rawFallbackFolderId === '__ungrouped__'
+          ? currentFolders[0]?.id || serverFolders[0]?.id || `fld-${Date.now()}`
+          : rawFallbackFolderId;
 
-        await createLinkInFirestore(
-          authUser.uid,
-          { ...createdLink, folder_id: fallbackFolderId },
-          fallbackFolderId
-        );
+      const finalCreatedLink: LinkItem = {
+        ...createdLink,
+        folder_id: fallbackFolderId,
+      };
+
+      if (createdLink.folder_id !== fallbackFolderId) {
+        try {
+          await fetch(`/api/links/${encodeURIComponent(createdLink.id)}`, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: getUserHeaders(true),
+            body: JSON.stringify({ folder_id: fallbackFolderId }),
+          });
+        } catch {
+          // Ignore background sync error
+        }
+      }
+
+      const targetFolderObj: Folder =
+        currentFolders.find((f) => f.id === fallbackFolderId) ??
+        serverFolders.find((f) => f.id === fallbackFolderId) ?? {
+          id: fallbackFolderId,
+          user_id: authUser?.uid || 'usr-local',
+          name: 'Tab đã lưu',
+          parent_id: null,
+          order_index: 0,
+          color: 'blue' as const,
+          collapsed: false,
+        };
+
+      const nextFolders = effectiveFolders.some((f) => f.id === fallbackFolderId)
+        ? effectiveFolders
+        : [...effectiveFolders, targetFolderObj];
+
+      const candidateLinks =
+        Array.isArray(data.links) && !get().isCloudSynced
+          ? (data.links as LinkItem[]).map((item) =>
+              item.id === finalCreatedLink.id ? finalCreatedLink : item
+            )
+          : [
+              finalCreatedLink,
+              ...get().links.filter((item) => item.id !== finalCreatedLink.id),
+            ];
+
+      const mergedLinks = mergeCachedVideoDuration(
+        candidateLinks,
+        get().links
+      );
+      const consolidated = consolidateLinksAcrossGroups(
+        mergedLinks,
+        nextFolders,
+        manuallyMovedLinkIds
+      );
+
+      let nextNotice = get().workspaceNotice;
+      if (consolidated.removedDuplicateLinks.length > 0) {
+        const targetGroupName =
+          nextFolders.find((f) => f.id === fallbackFolderId)?.name ||
+          'Tab đã lưu';
+        nextNotice = {
+          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: 'duplicate-removed',
+          sourceLabel:
+            finalCreatedLink.title ||
+            normalizeLinkSourceDomain(finalCreatedLink),
+          groupName: targetGroupName,
+          folderId: fallbackFolderId,
+        };
+      } else if (
+        matchedExistingFolderId &&
+        nextNotice?.kind !== 'duplicate-removed'
+      ) {
+        const targetGroupName =
+          nextFolders.find((f) => f.id === matchedExistingFolderId)
+            ?.name || 'Tab đã lưu';
+        const sourceLabel =
+          resolveYouTubeChannelFromLink(finalCreatedLink) ||
+          normalizeLinkSourceDomain(finalCreatedLink);
+        nextNotice = {
+          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: 'same-website-grouped',
+          sourceLabel,
+          groupName: targetGroupName,
+          folderId: matchedExistingFolderId,
+        };
       }
 
       set({
-        folders:
-          !get().isCloudSynced && serverFolders.length > 0
-            ? serverFolders
-            : currentFolders.length === 0 && serverFolders.length > 0
-            ? serverFolders
-            : get().folders,
-        links: mergeCachedVideoDuration(
-          data.links ?? [
-            { ...createdLink, folder_id: fallbackFolderId },
-            ...get().links,
-          ],
-          get().links
-        ),
+        folders: nextFolders,
+        links: consolidated.links,
         isScraping: false,
+        errorMessage: null,
+        workspaceNotice: nextNotice,
       });
-      return createdLink;
+
+      if (authUser && canSyncWithFirestore(authUser)) {
+        void (async () => {
+          try {
+            await createLinkInFirestore(
+              authUser.uid,
+              finalCreatedLink,
+              fallbackFolderId,
+              targetFolderObj
+            );
+          } catch (cloudErr) {
+            console.warn('Cloud link sync skipped:', cloudErr);
+          }
+        })();
+      }
+
+      if (
+        consolidated.movedLinks.length > 0 ||
+        consolidated.removedDuplicateLinks.length > 0 ||
+        consolidated.updatedKeptLinks.length > 0
+      ) {
+        void persistConsolidatedState(consolidated, authUser);
+      }
+
+      return (
+        consolidated.links.find((item) => item.id === finalCreatedLink.id) ??
+        finalCreatedLink
+      );
     } catch (error) {
       set({
         isScraping: false,
@@ -433,41 +980,157 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
 
   updateLink: async (id, patch) => {
     const previousLinks = get().links;
+    const currentFolders = get().folders;
     const targetLink = previousLinks.find((item) => item.id === id);
+    if (!targetLink) return;
+
     if (patch.video_duration || patch.channel_name) {
-      writeVideoMetaCache(id, targetLink?.url, {
+      writeVideoMetaCache(id, targetLink.url, {
         video_duration:
-          patch.video_duration ?? targetLink?.video_duration ?? undefined,
-        reading_minutes: patch.reading_minutes ?? targetLink?.reading_minutes,
+          patch.video_duration ?? targetLink.video_duration ?? undefined,
+        reading_minutes: patch.reading_minutes ?? targetLink.reading_minutes,
         channel_name:
-          patch.channel_name ?? targetLink?.channel_name ?? undefined,
+          patch.channel_name ?? targetLink.channel_name ?? undefined,
       });
     }
 
-    set((state) => ({
-      links: state.links.map((item) =>
-        item.id === id ? { ...item, ...patch } : item
-      ),
-    }));
+    const updatedCandidate: LinkItem = {
+      ...targetLink,
+      ...patch,
+    };
+
+    // If background scraping just resolved channel_name or description, check if an earlier group already owns this source
+    const autoMatchedFolderId =
+      patch.folder_id === undefined &&
+      !manuallyMovedLinkIds.has(id) &&
+      (patch.channel_name !== undefined || patch.description !== undefined)
+        ? findExistingGroupForLinkSource(
+            updatedCandidate,
+            previousLinks,
+            currentFolders,
+            id
+          )
+        : null;
+
+    const effectivePatch = {
+      ...patch,
+      ...(autoMatchedFolderId && autoMatchedFolderId !== targetLink.folder_id
+        ? { folder_id: autoMatchedFolderId }
+        : {}),
+    };
+
+    let nextLinks = previousLinks.map((item) =>
+      item.id === id ? { ...item, ...effectivePatch } : item
+    );
+
+    if (
+      effectivePatch.folder_id !== undefined &&
+      effectivePatch.folder_id !== targetLink.folder_id
+    ) {
+      nextLinks = moveAndReorderGroupLinks(nextLinks, {
+        linkId: id,
+        targetFolderId: effectivePatch.folder_id,
+        position: 'after',
+      });
+    }
+
+    const consolidated = consolidateLinksAcrossGroups(
+      nextLinks,
+      currentFolders,
+      manuallyMovedLinkIds
+    );
+    nextLinks = consolidated.links;
+
+    const updatedItemAfterConsolidation = nextLinks.find(
+      (item) => item.id === id
+    );
+    if (
+      updatedItemAfterConsolidation &&
+      updatedItemAfterConsolidation.folder_id !== targetLink.folder_id
+    ) {
+      effectivePatch.folder_id = updatedItemAfterConsolidation.folder_id;
+      effectivePatch.order_index = updatedItemAfterConsolidation.order_index;
+    }
+
+    let nextNotice = get().workspaceNotice;
+    if (consolidated.removedDuplicateLinks.length > 0) {
+      const firstDup = consolidated.removedDuplicateLinks[0];
+      const keptMatch = findDuplicateLinkByUrl(
+        firstDup.url,
+        nextLinks,
+        currentFolders
+      );
+      const targetGroupName =
+        currentFolders.find((f) => f.id === keptMatch?.folder_id)?.name ||
+        'Tab đã lưu';
+      const sourceLabel =
+        keptMatch?.title ||
+        firstDup.title ||
+        normalizeLinkSourceDomain(firstDup);
+      nextNotice = {
+        id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        kind: 'duplicate-removed',
+        sourceLabel,
+        groupName: targetGroupName,
+        folderId: keptMatch?.folder_id ?? null,
+      };
+    } else if (
+      updatedItemAfterConsolidation &&
+      updatedItemAfterConsolidation.folder_id &&
+      updatedItemAfterConsolidation.folder_id !== targetLink.folder_id &&
+      patch.folder_id === undefined &&
+      nextNotice?.kind !== 'duplicate-removed'
+    ) {
+      const targetGroupName =
+        currentFolders.find(
+          (f) => f.id === updatedItemAfterConsolidation.folder_id
+        )?.name || 'Tab đã lưu';
+      const sourceLabel =
+        resolveYouTubeChannelFromLink(updatedItemAfterConsolidation) ||
+        normalizeLinkSourceDomain(updatedItemAfterConsolidation);
+      nextNotice = {
+        id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        kind: 'same-website-grouped',
+        sourceLabel,
+        groupName: targetGroupName,
+        folderId: updatedItemAfterConsolidation.folder_id,
+      };
+    }
+
+    set({ links: nextLinks, workspaceNotice: nextNotice });
+
+    if (
+      consolidated.movedLinks.length > 0 ||
+      consolidated.removedDuplicateLinks.length > 0 ||
+      consolidated.updatedKeptLinks.length > 0
+    ) {
+      void persistConsolidatedState(consolidated, get().authUser);
+    }
+
+    // If this link itself was removed as a duplicate during consolidation, do not send a PUT for it
+    if (consolidated.removedDuplicateLinks.some((d) => d.id === id)) {
+      return;
+    }
 
     const hasFirestoreFields =
-      patch.title !== undefined ||
-      patch.description !== undefined ||
-      (patch.folder_id !== undefined && patch.folder_id !== null) ||
-      patch.status !== undefined ||
-      patch.order_index !== undefined;
+      effectivePatch.title !== undefined ||
+      effectivePatch.description !== undefined ||
+      (effectivePatch.folder_id !== undefined &&
+        effectivePatch.folder_id !== null) ||
+      effectivePatch.status !== undefined ||
+      effectivePatch.order_index !== undefined;
 
     try {
       const authUser = get().authUser;
       if (authUser && canSyncWithFirestore(authUser) && hasFirestoreFields) {
-        await updateLinkInFirestore(id, patch);
+        await updateLinkInFirestore(id, effectivePatch);
       }
 
       const response = await fetch(`/api/links/${encodeURIComponent(id)}`, {
         method: 'PUT',
         credentials: 'same-origin',
         headers: getUserHeaders(true),
-        body: JSON.stringify(patch),
+        body: JSON.stringify(effectivePatch),
       });
       if (!response.ok && !get().isCloudSynced && hasFirestoreFields) {
         throw new Error('Failed to update link.');
@@ -475,9 +1138,15 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       if (response.ok && !get().isCloudSynced) {
         const data = await response.json();
         if (Array.isArray(data.links)) {
-          set((state) => ({
-            links: mergeCachedVideoDuration(data.links, state.links),
-          }));
+          set((state) => {
+            const merged = mergeCachedVideoDuration(data.links, state.links);
+            const reconsolidated = consolidateLinksAcrossGroups(
+              merged,
+              state.folders,
+              manuallyMovedLinkIds
+            );
+            return { links: reconsolidated.links };
+          });
         }
       }
     } catch (error) {
@@ -499,6 +1168,8 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   ) => {
     if (!linkId) return;
     if (targetLinkId && linkId === targetLinkId) return;
+
+    manuallyMovedLinkIds.add(linkId);
 
     const previousLinks = get().links;
     const movingLink = previousLinks.find((item) => item.id === linkId);
@@ -598,6 +1269,7 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   },
 
   deleteLink: async (id) => {
+    manuallyMovedLinkIds.delete(id);
     const previousLinks = get().links;
     set({ links: previousLinks.filter((item) => item.id !== id) });
 
@@ -723,15 +1395,40 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         await createFolderInFirestore(authUser.uid, folderWithOrder);
       }
 
-      for (const tab of tabs) {
-        if (!tab.url) continue;
-        await get().addLink({
+      const validTabs = tabs.filter((t) => Boolean(t.url && t.url.trim()));
+      let lastRoutedFolderId: string | null = null;
+
+      for (const tab of validTabs) {
+        const added = await get().addLink({
           url: tab.url,
           title: tab.title,
           folder_id: folderWithOrder.id,
           tags: ['saved-tab'],
           status: LinkStatus.UNREAD,
         });
+        if (added?.folder_id) {
+          lastRoutedFolderId = added.folder_id;
+        }
+      }
+
+      // If valid tabs were imported and ALL of them were automatically consolidated into existing groups,
+      // remove the redundant empty group and focus the group that received the tabs.
+      if (validTabs.length > 0) {
+        const remainingInCreatedGroup = get().links.filter(
+          (l) => l.folder_id === folderWithOrder.id
+        );
+        if (remainingInCreatedGroup.length === 0) {
+          set({ newlyCreatedGroupId: null });
+          await get().deleteFolder(folderWithOrder.id);
+          const matchedExistingFolder = get().folders.find(
+            (f) => f.id === lastRoutedFolderId
+          );
+          set({
+            isImportingGroup: false,
+            activeFolderId: matchedExistingFolder?.id ?? null,
+          });
+          return matchedExistingFolder ?? null;
+        }
       }
 
       set({ isImportingGroup: false });

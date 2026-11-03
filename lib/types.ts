@@ -4,17 +4,41 @@ export enum LinkStatus {
   ARCHIVED = 'ARCHIVED',
 }
 
-export type TabGroupColor =
-  | 'blue'
-  | 'cyan'
-  | 'emerald'
-  | 'amber'
-  | 'orange'
-  | 'red'
-  | 'rose'
-  | 'purple'
-  | 'indigo'
-  | 'zinc';
+/**
+ * Ordered along the color spectrum (6x4 grid):
+ * Row 1 (Warm: Red -> Yellow): crimson, red, coral, orange, amber, yellow
+ * Row 2 (Cool Greens -> Cyan, opposing Row 1): lime, green, emerald, mint, teal, cyan
+ * Row 3 (Blues -> Violet -> Fuchsia, opposing Row 1/2): blue, ocean, indigo, violet, purple, fuchsia
+ * Row 4 (Rose/Pink & Contrasting Earth/Neutrals): rose, pink, gold, bronze, slate, zinc
+ */
+export const TAB_GROUP_COLORS = [
+  'crimson',
+  'red',
+  'coral',
+  'orange',
+  'amber',
+  'yellow',
+  'lime',
+  'green',
+  'emerald',
+  'mint',
+  'teal',
+  'cyan',
+  'blue',
+  'ocean',
+  'indigo',
+  'violet',
+  'purple',
+  'fuchsia',
+  'rose',
+  'pink',
+  'gold',
+  'bronze',
+  'slate',
+  'zinc',
+] as const;
+
+export type TabGroupColor = (typeof TAB_GROUP_COLORS)[number];
 
 export interface User {
   id: string;

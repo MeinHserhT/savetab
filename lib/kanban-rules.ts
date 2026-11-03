@@ -242,21 +242,94 @@ export interface ClusteredGroupResult {
   items: ClusteredGroupItem[];
 }
 
+const TRACKING_QUERY_PARAMS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_term',
+  'utm_content',
+  'utm_id',
+  'fbclid',
+  'gclid',
+  'msclkid',
+  'si',
+  'feature',
+  'pp',
+  'ref',
+  'source',
+  'igshid',
+  'mc_cid',
+  'mc_eid',
+]);
+
+function extractCanonicalYouTubeVideoId(parsed: URL, host: string): string | null {
+  if (host === 'youtu.be') {
+    const id = parsed.pathname.split('/').filter(Boolean)[0];
+    return id && id.length >= 6 ? id : null;
+  }
+  if (
+    host === 'youtube.com' ||
+    host.endsWith('.youtube.com') ||
+    host === 'youtube-nocookie.com'
+  ) {
+    const vParam = parsed.searchParams.get('v');
+    if (vParam && vParam.trim()) {
+      return vParam.trim();
+    }
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (
+      parts.length >= 2 &&
+      (parts[0] === 'shorts' ||
+        parts[0] === 'embed' ||
+        parts[0] === 'live' ||
+        parts[0] === 'v')
+    ) {
+      return parts[1];
+    }
+  }
+  return null;
+}
+
 export function normalizeLinkUrlKey(rawUrl: string): string {
   const trimmed = (rawUrl || '').trim();
   if (!trimmed) return '';
   try {
-    const parsed = new URL(trimmed);
-    const host = parsed.hostname.replace(/^(www|m)\./i, '').toLowerCase();
-    const path = parsed.pathname.replace(/\/+$/, '') || '/';
-    // Preserve key query params like YouTube video id `v`
-    const vParam = parsed.searchParams.get('v');
-    if (vParam && (host === 'youtube.com' || host.endsWith('.youtube.com'))) {
-      return `youtube.com/watch?v=${vParam}`;
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed);
+    const candidate = hasScheme ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(candidate);
+    const host = parsed.hostname
+      .replace(/^(www|m|mobile)\./i, '')
+      .toLowerCase();
+    const ytId = extractCanonicalYouTubeVideoId(parsed, host);
+    if (ytId) {
+      return `youtube.com/watch?v=${ytId}`;
     }
-    return `${host}${path}${parsed.search}`.toLowerCase();
+
+    const path = parsed.pathname.replace(/\/+$/, '') || '/';
+    const keptParams: Array<[string, string]> = [];
+    parsed.searchParams.forEach((value, key) => {
+      const lowerKey = key.toLowerCase();
+      if (!TRACKING_QUERY_PARAMS.has(lowerKey)) {
+        keptParams.push([lowerKey, value]);
+      }
+    });
+    keptParams.sort((a, b) =>
+      a[0] !== b[0] ? a[0].localeCompare(b[0]) : a[1].localeCompare(b[1])
+    );
+    const queryString =
+      keptParams.length > 0
+        ? `?${keptParams
+            .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+            .join('&')}`
+        : '';
+
+    return `${host}${path}${queryString}`.toLowerCase();
   } catch {
-    return trimmed.toLowerCase();
+    return trimmed
+      .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+      .replace(/^(www|m|mobile)\./i, '')
+      .replace(/\/+$/, '')
+      .toLowerCase();
   }
 }
 
@@ -274,6 +347,426 @@ export function getLinkSourceBucketKey(
   }
   const normDomain = normalizeLinkSourceDomain(link);
   return `domain:${normDomain}`;
+}
+
+export function isConsolidatableSourceBucketKey(bucketKey: string): boolean {
+  if (!bucketKey) return false;
+  if (bucketKey.startsWith('yt-channel:')) {
+    return bucketKey.slice('yt-channel:'.length).trim().length > 0;
+  }
+  if (bucketKey.startsWith('yt-url:')) {
+    return bucketKey.slice('yt-url:'.length).trim().length > 0;
+  }
+  if (bucketKey.startsWith('domain:')) {
+    const domain = bucketKey.slice('domain:'.length).trim();
+    return Boolean(domain && domain !== 'unknown');
+  }
+  return false;
+}
+
+function compareLinksByFirstAppearance(
+  a: LinkItem,
+  b: LinkItem,
+  folderOrderMap: ReadonlyMap<string, number>
+): number {
+  const timeA = a.created_at ? Date.parse(a.created_at) : NaN;
+  const timeB = b.created_at ? Date.parse(b.created_at) : NaN;
+  if (Number.isFinite(timeA) && Number.isFinite(timeB) && timeA !== timeB) {
+    return timeA - timeB;
+  }
+  if (a.created_at && b.created_at && a.created_at !== b.created_at) {
+    return a.created_at.localeCompare(b.created_at);
+  }
+  const folderOrderA = a.folder_id
+    ? (folderOrderMap.get(a.folder_id) ?? Number.MAX_SAFE_INTEGER)
+    : Number.MAX_SAFE_INTEGER;
+  const folderOrderB = b.folder_id
+    ? (folderOrderMap.get(b.folder_id) ?? Number.MAX_SAFE_INTEGER)
+    : Number.MAX_SAFE_INTEGER;
+  if (folderOrderA !== folderOrderB) {
+    return folderOrderA - folderOrderB;
+  }
+  if (a.order_index !== b.order_index) {
+    return a.order_index - b.order_index;
+  }
+  return a.id.localeCompare(b.id);
+}
+
+function isPlaceholderLikeTitle(title: string | undefined, domain?: string): boolean {
+  const trimmed = (title || '').trim().toLowerCase();
+  if (!trimmed) return true;
+  if (
+    trimmed === 'youtube' ||
+    trimmed === '- youtube' ||
+    trimmed === 'watch - youtube' ||
+    trimmed.startsWith('youtube clip (') ||
+    trimmed === 'before you continue to youtube'
+  ) {
+    return true;
+  }
+  if (domain && trimmed === domain.trim().toLowerCase()) {
+    return true;
+  }
+  return false;
+}
+
+function mergeDuplicateLinkMetadata(kept: LinkItem, duplicate: LinkItem): {
+  merged: LinkItem;
+  changed: boolean;
+} {
+  let changed = false;
+  const next: LinkItem = { ...kept };
+
+  if (
+    isPlaceholderLikeTitle(kept.title, kept.domain) &&
+    !isPlaceholderLikeTitle(duplicate.title, duplicate.domain) &&
+    duplicate.title.trim()
+  ) {
+    next.title = duplicate.title;
+    changed = true;
+  }
+
+  const keptChannel = resolveYouTubeChannelFromLink(kept);
+  const dupChannel = resolveYouTubeChannelFromLink(duplicate);
+  if (!keptChannel && dupChannel) {
+    next.channel_name = dupChannel;
+    changed = true;
+  }
+
+  if (!kept.video_duration && duplicate.video_duration) {
+    next.video_duration = duplicate.video_duration;
+    changed = true;
+  }
+
+  if (!kept.image_url && duplicate.image_url) {
+    next.image_url = duplicate.image_url;
+    changed = true;
+  }
+
+  if (!kept.favicon && duplicate.favicon) {
+    next.favicon = duplicate.favicon;
+    changed = true;
+  }
+
+  if (
+    (!kept.description || kept.description.startsWith('Saved web reference')) &&
+    duplicate.description &&
+    !duplicate.description.startsWith('Saved web reference')
+  ) {
+    next.description = duplicate.description;
+    changed = true;
+  }
+
+  return { merged: next, changed };
+}
+
+/**
+ * Finds the earliest existing tab with the exact same normalized URL key.
+ */
+export function findDuplicateLinkByUrl(
+  rawUrl: string,
+  existingLinks: LinkItem[],
+  folders: Folder[] = [],
+  excludeLinkId?: string
+): LinkItem | null {
+  const targetKey = normalizeLinkUrlKey(rawUrl);
+  if (!targetKey) return null;
+
+  const folderOrderMap = new Map<string, number>();
+  folders.forEach((folder, idx) => {
+    folderOrderMap.set(folder.id, folder.order_index ?? idx);
+  });
+
+  const matches = existingLinks.filter((item) => {
+    if (excludeLinkId && item.id === excludeLinkId) return false;
+    return normalizeLinkUrlKey(item.url) === targetKey;
+  });
+
+  if (matches.length === 0) return null;
+
+  matches.sort((a, b) => compareLinksByFirstAppearance(a, b, folderOrderMap));
+  return matches[0] ?? null;
+}
+
+export interface DeduplicateLinksResult {
+  links: LinkItem[];
+  removedLinks: LinkItem[];
+  updatedKeptLinks: LinkItem[];
+}
+
+/**
+ * Removes duplicate tabs (both old and newly added) that share the same normalized URL.
+ * Keeps the earliest tab, merges any richer metadata from duplicates into the kept tab,
+ * and normalizes contiguous 0..n-1 `order_index` values in each group lane.
+ */
+export function deduplicateLinks(
+  allLinks: LinkItem[],
+  folders: Folder[] = []
+): DeduplicateLinksResult {
+  if (allLinks.length <= 1) {
+    return { links: allLinks, removedLinks: [], updatedKeptLinks: [] };
+  }
+
+  const folderOrderMap = new Map<string, number>();
+  folders.forEach((folder, idx) => {
+    folderOrderMap.set(folder.id, folder.order_index ?? idx);
+  });
+
+  const sortedByAppearance = allLinks
+    .slice()
+    .sort((a, b) => compareLinksByFirstAppearance(a, b, folderOrderMap));
+
+  const keptByUrlKey = new Map<string, LinkItem>();
+  const changedKeptIds = new Set<string>();
+  const removedLinks: LinkItem[] = [];
+  const removedIds = new Set<string>();
+
+  for (const link of sortedByAppearance) {
+    const urlKey = normalizeLinkUrlKey(link.url);
+    if (!urlKey) {
+      keptByUrlKey.set(`__id__:${link.id}`, link);
+      continue;
+    }
+
+    const existingKept = keptByUrlKey.get(urlKey);
+    if (!existingKept) {
+      keptByUrlKey.set(urlKey, link);
+    } else {
+      removedLinks.push(link);
+      removedIds.add(link.id);
+      const { merged, changed } = mergeDuplicateLinkMetadata(existingKept, link);
+      if (changed) {
+        keptByUrlKey.set(urlKey, merged);
+        changedKeptIds.add(merged.id);
+      }
+    }
+  }
+
+  if (removedLinks.length === 0) {
+    return { links: allLinks, removedLinks: [], updatedKeptLinks: [] };
+  }
+
+  const keptById = new Map<string, LinkItem>();
+  for (const item of keptByUrlKey.values()) {
+    keptById.set(item.id, item);
+  }
+
+  const getFolderLaneKey = (folderId: string | null | undefined): string =>
+    folderId && folderId.trim() ? folderId.trim() : '__ungrouped__';
+
+  const laneKeys: string[] = [];
+  const laneMap = new Map<string, LinkItem[]>();
+  for (const link of allLinks) {
+    if (removedIds.has(link.id)) continue;
+    const updatedItem = keptById.get(link.id) ?? link;
+    const key = getFolderLaneKey(updatedItem.folder_id);
+    if (!laneMap.has(key)) {
+      laneKeys.push(key);
+      laneMap.set(key, []);
+    }
+    laneMap.get(key)!.push(updatedItem);
+  }
+
+  const normalizedLinks: LinkItem[] = [];
+  const updatedKeptLinks: LinkItem[] = [];
+
+  for (const key of laneKeys) {
+    const laneItems = sortGroupLinks(laneMap.get(key) ?? []);
+    laneItems.forEach((item, idx) => {
+      const normalizedItem =
+        item.order_index !== idx ? { ...item, order_index: idx } : item;
+      normalizedLinks.push(normalizedItem);
+      if (changedKeptIds.has(item.id)) {
+        updatedKeptLinks.push(normalizedItem);
+      }
+    });
+  }
+
+  return {
+    links: normalizedLinks,
+    removedLinks,
+    updatedKeptLinks,
+  };
+}
+
+/**
+ * Finds the existing group (folder_id) where a candidate link's YouTube channel
+ * or website domain appeared first. Returns null if no existing group has a matching tab.
+ */
+export function findExistingGroupForLinkSource(
+  candidateLink: Pick<
+    LinkItem,
+    'id' | 'url' | 'domain' | 'channel_name' | 'description'
+  >,
+  existingLinks: LinkItem[],
+  folders: Folder[] = [],
+  excludeLinkId?: string
+): string | null {
+  const bucketKey = getLinkSourceBucketKey(candidateLink);
+  if (!isConsolidatableSourceBucketKey(bucketKey)) {
+    return null;
+  }
+
+  const validFolderIds = new Set(folders.map((f) => f.id));
+  const folderOrderMap = new Map<string, number>();
+  folders.forEach((folder, idx) => {
+    folderOrderMap.set(folder.id, folder.order_index ?? idx);
+  });
+
+  const candidateUrlKey = normalizeLinkUrlKey(candidateLink.url);
+
+  const matchingLinks = existingLinks.filter((item) => {
+    if (item.id === candidateLink.id || (excludeLinkId && item.id === excludeLinkId)) {
+      return false;
+    }
+    if (!item.folder_id || !item.folder_id.trim()) {
+      return false;
+    }
+    if (validFolderIds.size > 0 && !validFolderIds.has(item.folder_id)) {
+      return false;
+    }
+    const itemBucketKey = getLinkSourceBucketKey(item);
+    if (itemBucketKey === bucketKey) {
+      return true;
+    }
+    if (candidateUrlKey && normalizeLinkUrlKey(item.url) === candidateUrlKey) {
+      return true;
+    }
+    return false;
+  });
+
+  if (matchingLinks.length === 0) {
+    return null;
+  }
+
+  const sortedMatches = matchingLinks
+    .slice()
+    .sort((a, b) => compareLinksByFirstAppearance(a, b, folderOrderMap));
+
+  return sortedMatches[0]?.folder_id ?? null;
+}
+
+export interface ConsolidateLinksResult {
+  links: LinkItem[];
+  movedLinks: Array<{
+    linkId: string;
+    fromFolderId: string | null;
+    toFolderId: string;
+  }>;
+  removedDuplicateLinks: LinkItem[];
+  updatedKeptLinks: LinkItem[];
+}
+
+/**
+ * Deduplicates identical URLs (removing old and new duplicates) and consolidates
+ * tabs across groups so that any tabs sharing the same YouTube channel
+ * or website domain are grouped together into the existing group where that channel
+ * or domain appeared first.
+ */
+export function consolidateLinksAcrossGroups(
+  allLinks: LinkItem[],
+  folders: Folder[] = [],
+  pinnedLinkIds?: ReadonlySet<string>
+): ConsolidateLinksResult {
+  if (allLinks.length <= 1) {
+    return {
+      links: allLinks,
+      movedLinks: [],
+      removedDuplicateLinks: [],
+      updatedKeptLinks: [],
+    };
+  }
+
+  const deduplicated = deduplicateLinks(allLinks, folders);
+  const workingLinks = deduplicated.links;
+
+  if (workingLinks.length <= 1) {
+    return {
+      links: workingLinks,
+      movedLinks: [],
+      removedDuplicateLinks: deduplicated.removedLinks,
+      updatedKeptLinks: deduplicated.updatedKeptLinks,
+    };
+  }
+
+  const validFolderIds = new Set(folders.map((f) => f.id));
+  const folderOrderMap = new Map<string, number>();
+  folders.forEach((folder, idx) => {
+    folderOrderMap.set(folder.id, folder.order_index ?? idx);
+  });
+
+  const buckets = new Map<string, LinkItem[]>();
+  for (const link of workingLinks) {
+    if (!link.folder_id || !link.folder_id.trim()) continue;
+    if (validFolderIds.size > 0 && !validFolderIds.has(link.folder_id)) continue;
+
+    const bucketKey = getLinkSourceBucketKey(link);
+    if (!isConsolidatableSourceBucketKey(bucketKey)) continue;
+
+    const list = buckets.get(bucketKey);
+    if (list) {
+      list.push(link);
+    } else {
+      buckets.set(bucketKey, [link]);
+    }
+  }
+
+  const targetFolderByLinkId = new Map<string, string>();
+  const movedLinks: Array<{
+    linkId: string;
+    fromFolderId: string | null;
+    toFolderId: string;
+  }> = [];
+
+  for (const bucketLinks of buckets.values()) {
+    if (bucketLinks.length < 2) continue;
+
+    const sortedByAppearance = bucketLinks
+      .slice()
+      .sort((a, b) => compareLinksByFirstAppearance(a, b, folderOrderMap));
+
+    const canonicalFolderId = sortedByAppearance[0]?.folder_id;
+    if (!canonicalFolderId) continue;
+
+    for (const item of sortedByAppearance.slice(1)) {
+      if (pinnedLinkIds?.has(item.id)) continue;
+      if (item.folder_id && item.folder_id !== canonicalFolderId) {
+        targetFolderByLinkId.set(item.id, canonicalFolderId);
+        movedLinks.push({
+          linkId: item.id,
+          fromFolderId: item.folder_id,
+          toFolderId: canonicalFolderId,
+        });
+      }
+    }
+  }
+
+  if (movedLinks.length === 0) {
+    return {
+      links: workingLinks,
+      movedLinks: [],
+      removedDuplicateLinks: deduplicated.removedLinks,
+      updatedKeptLinks: deduplicated.updatedKeptLinks,
+    };
+  }
+
+  let nextLinks = workingLinks.slice();
+  for (const move of movedLinks) {
+    const destFolderId = targetFolderByLinkId.get(move.linkId);
+    if (!destFolderId) continue;
+    nextLinks = moveAndReorderGroupLinks(nextLinks, {
+      linkId: move.linkId,
+      targetFolderId: destFolderId,
+      position: 'after',
+    });
+  }
+
+  return {
+    links: nextLinks,
+    movedLinks,
+    removedDuplicateLinks: deduplicated.removedLinks,
+    updatedKeptLinks: deduplicated.updatedKeptLinks,
+  };
 }
 
 export function sortGroupLinks(links: LinkItem[]): LinkItem[] {

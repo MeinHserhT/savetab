@@ -97,23 +97,25 @@ export async function translateCJKTitleIfNeeded(
   const ai = getGeminiClient();
   if (ai) {
     try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: `Translate any Chinese (including Mandarin, Cantonese, Hokkien, Hakka, Traditional, or Simplified dialects), Korean (including regional dialects and slang), or Japanese (including Kansai and regional dialects) text in the following browser tab title into natural, concise English. Keep existing English or Vietnamese words, numbers, brackets, and brand/channel names intact. Return ONLY the translated title text without quotes or explanations.\n\nTab Title: ${trimmed}`,
-        config: {
-          temperature: 0.1,
-        },
-      });
+      const response = await Promise.race([
+        ai.models.generateContent({
+          model: 'gemini-3.5-flash',
+          contents: `Translate any Chinese (including Mandarin, Cantonese, Hokkien, Hakka, Traditional, or Simplified dialects), Korean (including regional dialects and slang), or Japanese (including Kansai and regional dialects) text in the following browser tab title into natural, concise English. Keep existing English or Vietnamese words, numbers, brackets, and brand/channel names intact. Return ONLY the translated title text without quotes or explanations.\n\nTab Title: ${trimmed}`,
+          config: {
+            temperature: 0.1,
+          },
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+      ]);
 
-      const candidate = response.text?.trim();
+      const candidate = response?.text?.trim();
       if (candidate && !containsCJK(candidate)) {
         const sanitized = sanitizeTranslatedTitle(candidate, trimmed);
         setCachedTranslation(trimmed, sanitized);
         return sanitized;
       }
       if (candidate) {
-        // If Gemini left a few CJK chars (e.g. proper noun), run fallback on remaining or accept if mostly translated
-        const fallbackRefined = await translateViaGoogleGtxFallback(candidate);
+        const fallbackRefined = await translateViaGoogleGtxFallback(candidate, 2000);
         const finalTitle = sanitizeTranslatedTitle(
           fallbackRefined || candidate,
           trimmed
@@ -126,7 +128,7 @@ export async function translateCJKTitleIfNeeded(
     }
   }
 
-  const fallback = await translateViaGoogleGtxFallback(trimmed);
+  const fallback = await translateViaGoogleGtxFallback(trimmed, 2000);
   if (fallback) {
     setCachedTranslation(trimmed, fallback);
     return fallback;

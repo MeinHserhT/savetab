@@ -19,6 +19,7 @@ export function ThemeSwitcher() {
       <input
         id="checkboxInput"
         type="checkbox"
+        suppressHydrationWarning
         checked={isDark}
         onChange={toggleMode}
         aria-label={t.theme.selectorAria}

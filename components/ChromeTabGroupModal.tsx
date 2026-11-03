@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ClipboardPaste,
   FolderPlus,
   Layers,
@@ -12,6 +13,10 @@ import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { COLOR_KEYS, getTabGroupStyles } from '@/components/KanbanBoard';
+import {
+  findDuplicateLinkByUrl,
+  normalizeLinkUrlKey,
+} from '@/lib/kanban-rules';
 import {
   inferDefaultGroupName,
   parseTabGroupFromDataTransfer,
@@ -29,7 +34,8 @@ export function ChromeTabGroupModal({
   isOpen,
   onClose,
 }: ChromeTabGroupModalProps) {
-  const { folders, isImportingGroup, createFolderWithLinks } = useLinkStore();
+  const { links, folders, isImportingGroup, createFolderWithLinks } =
+    useLinkStore();
   const { mode } = useThemeStore();
   const { t } = useLanguageStore();
   const groupStyles = getTabGroupStyles(mode);
@@ -62,6 +68,41 @@ export function ChromeTabGroupModal({
     () => parseTabGroupFromTextOrHtml(rawInput, rawHtml),
     [rawInput, rawHtml]
   );
+
+  const duplicateSummary = useMemo(() => {
+    if (parsedPayload.tabs.length === 0) return null;
+    let duplicateCount = 0;
+    let firstMatchedGroupName = '';
+    const seenKeys = new Set<string>();
+
+    for (const tab of parsedPayload.tabs) {
+      const existing = findDuplicateLinkByUrl(tab.url, links, folders);
+      const urlKey = normalizeLinkUrlKey(tab.url);
+      if (existing) {
+        duplicateCount++;
+        if (!firstMatchedGroupName) {
+          firstMatchedGroupName =
+            folders.find((f) => f.id === existing.folder_id)?.name ||
+            t.sidebar.allSavedTabs;
+        }
+      } else if (urlKey && seenKeys.has(urlKey)) {
+        duplicateCount++;
+      }
+      if (urlKey) {
+        seenKeys.add(urlKey);
+      }
+    }
+
+    if (duplicateCount === 0) return null;
+    return {
+      count: duplicateCount,
+      groupName:
+        firstMatchedGroupName ||
+        groupName.trim() ||
+        parsedPayload.groupName ||
+        t.board.defaultNewGroupName,
+    };
+  }, [parsedPayload, links, folders, groupName, t]);
 
   useEffect(() => {
     if (parsedPayload.color) {
@@ -308,6 +349,22 @@ export function ChromeTabGroupModal({
                 {t.chromeImport.extBookmarkTipDesc}
               </p>
             </div>
+
+            {duplicateSummary && (
+              <div
+                role="alert"
+                data-testid="chrome-import-duplicate-alert"
+                className="px-3 py-2.5 rounded-md bg-amber-500/15 border border-amber-500/60 flex items-start gap-2 text-xs text-amber-600 dark:text-amber-300"
+              >
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+                <span className="font-medium leading-snug">
+                  {t.chromeImport.duplicateBatchAlert(
+                    duplicateSummary.count,
+                    duplicateSummary.groupName
+                  )}
+                </span>
+              </div>
+            )}
 
             {localError && (
               <div

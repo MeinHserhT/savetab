@@ -7,6 +7,7 @@ import { useLinkStore } from '@/store/useLinkStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { Sidebar } from '@/components/Sidebar';
 import { KanbanBoard } from '@/components/KanbanBoard';
+import { WorkspaceDndProvider } from '@/components/WorkspaceDndProvider';
 import { AddLinkModal } from '@/components/AddLinkModal';
 import { ChromeTabGroupModal } from '@/components/ChromeTabGroupModal';
 import { ThemeSwitcher } from '@/components/ThemeSwitcher';
@@ -40,7 +41,10 @@ export default function HomePage() {
   };
 
   return (
-    <div className="h-dvh max-h-dvh w-full overflow-hidden flex flex-col bg-[var(--tf-canvas)] text-[var(--tf-text)] transition-colors duration-200">
+    <div
+      suppressHydrationWarning
+      className="h-dvh max-h-dvh w-full overflow-hidden flex flex-col bg-[var(--tf-canvas)] text-[var(--tf-text)] transition-colors duration-200"
+    >
       <header className="shrink-0 flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 lg:px-6 py-2 sm:py-2.5 border-b border-[var(--tf-border)] bg-[var(--tf-surface)] transition-colors duration-200">
         <a
           href="#all-groups"
@@ -83,14 +87,16 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Main Workspace Container */}
-      <main className="relative flex-1 flex flex-row min-h-0 overflow-hidden">
-        <Sidebar />
-        <KanbanBoard
-          onOpenAddModal={handleOpenAddModal}
-          onOpenImportModal={() => setIsImportGroupModalOpen(true)}
-        />
-      </main>
+      {/* Main Workspace Container with @dnd-kit Context */}
+      <WorkspaceDndProvider>
+        <main className="relative flex-1 flex flex-row min-h-0 overflow-hidden">
+          <Sidebar />
+          <KanbanBoard
+            onOpenAddModal={handleOpenAddModal}
+            onOpenImportModal={() => setIsImportGroupModalOpen(true)}
+          />
+        </main>
+      </WorkspaceDndProvider>
 
       {/* Accessible Save Link Modal */}
       <AddLinkModal

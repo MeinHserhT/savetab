@@ -19,7 +19,13 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { Folder, LinkItem, LinkStatus, TabGroupColor } from './types';
+import {
+  Folder,
+  LinkItem,
+  LinkStatus,
+  TAB_GROUP_COLORS,
+  TabGroupColor,
+} from './types';
 import { isLegacyMockLink, isLegacySeedFolder } from './kanban-rules';
 
 // Initialize Firebase App & Services
@@ -40,18 +46,7 @@ export const MAX_LINK_DOMAIN_LENGTH = 255;
 export const MAX_LINK_TITLE_LENGTH = 300;
 export const MAX_LINK_DESCRIPTION_LENGTH = 1000;
 
-const ALLOWED_COLORS: TabGroupColor[] = [
-  'blue',
-  'cyan',
-  'emerald',
-  'amber',
-  'orange',
-  'red',
-  'rose',
-  'purple',
-  'indigo',
-  'zinc',
-];
+const ALLOWED_COLORS: readonly TabGroupColor[] = TAB_GROUP_COLORS;
 
 const ALLOWED_STATUSES: LinkStatus[] = [
   LinkStatus.UNREAD,
@@ -243,6 +238,11 @@ export async function upsertUserProfileInFirestore(user: {
   }
 }
 
+const knownCloudFolderIds = new Set<string>();
+const knownCloudLinkIds = new Set<string>();
+let hasLoadedCloudFolders = false;
+let hasLoadedCloudLinks = false;
+
 export async function ensureUserWorkspaceSeededInFirestore(
   uid: string,
   seedFolders: Folder[],
@@ -297,6 +297,7 @@ export async function ensureUserWorkspaceSeededInFirestore(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      knownCloudFolderIds.add(newFolderId);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, folderPath);
     }
@@ -319,6 +320,7 @@ export async function ensureUserWorkspaceSeededInFirestore(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      knownCloudFolderIds.add(fallbackFolderId);
     } catch (error) {
       handleFirestoreError(
         error,
@@ -369,6 +371,7 @@ export async function ensureUserWorkspaceSeededInFirestore(
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      knownCloudLinkIds.add(newLinkId);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, linkPath);
     }
@@ -381,6 +384,11 @@ export function subscribeToUserWorkspace(
   onLinksChange: (links: LinkItem[]) => void
 ): () => void {
   const safeUid = sanitizeId(uid, 'usr');
+
+  knownCloudFolderIds.clear();
+  knownCloudLinkIds.clear();
+  hasLoadedCloudFolders = false;
+  hasLoadedCloudLinks = false;
 
   const foldersQuery = query(
     collection(db, 'folders'),
@@ -422,6 +430,7 @@ export function subscribeToUserWorkspace(
       if (isLegacyEmptySeed) {
         if (!deletedFolderDocIds.has(entry.docId)) {
           deletedFolderDocIds.add(entry.docId);
+          knownCloudFolderIds.delete(entry.docId);
           void deleteDoc(doc(db, 'folders', entry.docId)).catch(() => {});
         }
       } else {
@@ -435,13 +444,17 @@ export function subscribeToUserWorkspace(
   const unsubFolders = onSnapshot(
     foldersQuery,
     (snapshot) => {
+      knownCloudFolderIds.clear();
       latestRawFolders = snapshot.docs
         .map((docSnap) => {
+          knownCloudFolderIds.add(docSnap.id);
           const d = docSnap.data();
+          const folderId = String(d.id || docSnap.id);
+          knownCloudFolderIds.add(folderId);
           return {
             docId: docSnap.id,
             folder: {
-              id: String(d.id || docSnap.id),
+              id: folderId,
               user_id: String(d.user_id || safeUid),
               name: String(d.name || 'Untitled'),
               parent_id: null,
@@ -453,6 +466,7 @@ export function subscribeToUserWorkspace(
         })
         .sort((a, b) => a.folder.order_index - b.folder.order_index);
       hasLoadedFolders = true;
+      hasLoadedCloudFolders = true;
       emitCleanedFolders();
     },
     (error) => {
@@ -463,6 +477,7 @@ export function subscribeToUserWorkspace(
   const unsubLinks = onSnapshot(
     linksQuery,
     (snapshot) => {
+      knownCloudLinkIds.clear();
       const realLinks: LinkItem[] = [];
       for (const docSnap of snapshot.docs) {
         const d = docSnap.data();
@@ -473,8 +488,11 @@ export function subscribeToUserWorkspace(
           }
           continue;
         }
+        const resolvedId = String(d.id || docSnap.id);
+        knownCloudLinkIds.add(docSnap.id);
+        knownCloudLinkIds.add(resolvedId);
         realLinks.push({
-          id: String(d.id || docSnap.id),
+          id: resolvedId,
           user_id: String(d.user_id || safeUid),
           folder_id: d.folder_id ? String(d.folder_id) : null,
           url: String(d.url || ''),
@@ -498,6 +516,7 @@ export function subscribeToUserWorkspace(
       realLinks.sort((a, b) => a.order_index - b.order_index);
       latestRealLinks = realLinks;
       hasLoadedLinks = true;
+      hasLoadedCloudLinks = true;
       onLinksChange(realLinks);
       emitCleanedFolders();
     },
@@ -509,16 +528,55 @@ export function subscribeToUserWorkspace(
   return () => {
     unsubFolders();
     unsubLinks();
+    knownCloudFolderIds.clear();
+    knownCloudLinkIds.clear();
+    hasLoadedCloudFolders = false;
+    hasLoadedCloudLinks = false;
   };
 }
 
 export async function createFolderInFirestore(
   uid: string,
   folder: Folder
-): Promise<void> {
-  if (!canSyncWithFirestore(auth.currentUser)) return;
+): Promise<string> {
+  if (!canSyncWithFirestore(auth.currentUser)) return folder.id;
   const safeUid = sanitizeId(uid, 'usr');
-  const folderId = sanitizeId(folder.id, 'fld');
+  const rawFolderId =
+    !folder.id || folder.id === '__ungrouped__'
+      ? `fld-${safeUid.slice(0, 8)}-default`
+      : folder.id;
+  let folderId = sanitizeId(rawFolderId, 'fld');
+
+  if (knownCloudFolderIds.has(folderId)) {
+    return folderId;
+  }
+
+  try {
+    const existingSnap = await getDoc(doc(db, 'folders', folderId));
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data();
+      if (existingData?.user_id === safeUid) {
+        knownCloudFolderIds.add(folderId);
+        return folderId;
+      }
+      // Folder ID collision with a different user/guest session — scope to current user
+      folderId = sanitizeId(
+        `fld-${safeUid.slice(0, 8)}-${folderId}`.slice(0, MAX_ID_LENGTH),
+        'fld'
+      );
+      if (knownCloudFolderIds.has(folderId)) {
+        return folderId;
+      }
+      const scopedSnap = await getDoc(doc(db, 'folders', folderId));
+      if (scopedSnap.exists() && scopedSnap.data()?.user_id === safeUid) {
+        knownCloudFolderIds.add(folderId);
+        return folderId;
+      }
+    }
+  } catch {
+    // Proceed to create if getDoc failed or doc did not exist
+  }
+
   const path = `folders/${folderId}`;
   try {
     await setDoc(doc(db, 'folders', folderId), {
@@ -529,11 +587,13 @@ export async function createFolderInFirestore(
       collapsed: Boolean(folder.collapsed),
       order_index: Math.max(
         0,
-        Math.min(10000, Number(folder.order_index) || 0)
+        Math.min(10000, Math.round(Number(folder.order_index) || 0))
       ),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    knownCloudFolderIds.add(folderId);
+    return folderId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
@@ -545,6 +605,9 @@ export async function updateFolderInFirestore(
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeId = sanitizeId(folderId, 'fld');
+  if (hasLoadedCloudFolders && !knownCloudFolderIds.has(safeId)) {
+    return;
+  }
   const path = `folders/${safeId}`;
   const updatePayload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
@@ -562,7 +625,7 @@ export async function updateFolderInFirestore(
   if (patch.order_index !== undefined) {
     updatePayload.order_index = Math.max(
       0,
-      Math.min(10000, Number(patch.order_index) || 0)
+      Math.min(10000, Math.round(Number(patch.order_index) || 0))
     );
   }
 
@@ -583,6 +646,10 @@ export async function deleteFolderInFirestore(
 
   for (const link of folderLinks) {
     const safeLinkId = sanitizeId(link.id, 'lnk');
+    if (hasLoadedCloudLinks && !knownCloudLinkIds.has(safeLinkId)) {
+      continue;
+    }
+    knownCloudLinkIds.delete(safeLinkId);
     try {
       await deleteDoc(doc(db, 'links', safeLinkId));
     } catch (error) {
@@ -590,6 +657,10 @@ export async function deleteFolderInFirestore(
     }
   }
 
+  if (hasLoadedCloudFolders && !knownCloudFolderIds.has(safeId)) {
+    return;
+  }
+  knownCloudFolderIds.delete(safeId);
   try {
     await deleteDoc(doc(db, 'folders', safeId));
   } catch (error) {
@@ -600,39 +671,105 @@ export async function deleteFolderInFirestore(
 export async function createLinkInFirestore(
   uid: string,
   link: LinkItem,
-  fallbackFolderId: string
+  fallbackFolderId: string,
+  fallbackFolder?: Partial<Folder>
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeUid = sanitizeId(uid, 'usr');
-  const linkId = sanitizeId(link.id, 'lnk');
-  const targetFolderId = sanitizeId(
-    link.folder_id || fallbackFolderId,
-    'fld'
-  );
+  let linkId = sanitizeId(link.id, 'lnk');
+  const rawTargetFolderId =
+    !link.folder_id || link.folder_id === '__ungrouped__'
+      ? !fallbackFolderId || fallbackFolderId === '__ungrouped__'
+        ? `fld-${safeUid.slice(0, 8)}-default`
+        : fallbackFolderId
+      : link.folder_id;
+
+  // Guarantee the parent folder exists in Firestore and is owned by safeUid before creating the link
+  const verifiedFolderId = await createFolderInFirestore(safeUid, {
+    id: rawTargetFolderId,
+    user_id: safeUid,
+    name: fallbackFolder?.name || 'Tab đã lưu',
+    parent_id: null,
+    order_index: fallbackFolder?.order_index ?? 0,
+    color: fallbackFolder?.color ?? 'blue',
+    collapsed: Boolean(fallbackFolder?.collapsed),
+  });
+
+  if (knownCloudLinkIds.has(linkId)) {
+    await updateLinkInFirestore(linkId, {
+      title: link.title,
+      description: link.description,
+      folder_id: verifiedFolderId,
+      status: link.status,
+      order_index: link.order_index,
+    });
+    return;
+  }
+
+  try {
+    const existingLinkSnap = await getDoc(doc(db, 'links', linkId));
+    if (existingLinkSnap.exists()) {
+      if (existingLinkSnap.data()?.user_id === safeUid) {
+        knownCloudLinkIds.add(linkId);
+        await updateLinkInFirestore(linkId, {
+          title: link.title,
+          description: link.description,
+          folder_id: verifiedFolderId,
+          status: link.status,
+          order_index: link.order_index,
+        });
+        return;
+      }
+      linkId = sanitizeId(
+        `lnk-${safeUid.slice(0, 8)}-${linkId}`.slice(0, MAX_ID_LENGTH),
+        'lnk'
+      );
+    }
+  } catch {
+    // Proceed to create
+  }
+
   const path = `links/${linkId}`;
+  const safeUrl =
+    (link.url || '').trim().slice(0, MAX_LINK_URL_LENGTH) ||
+    'https://example.com';
+  const safeDomain =
+    (link.domain || '').trim().slice(0, MAX_LINK_DOMAIN_LENGTH) ||
+    'youtube.com';
+  const safeTitle =
+    (link.title || safeDomain || 'Saved Tab')
+      .trim()
+      .slice(0, MAX_LINK_TITLE_LENGTH) || 'Saved Tab';
+  const safeDescription = (link.description || '').slice(
+    0,
+    MAX_LINK_DESCRIPTION_LENGTH
+  );
+  const safeImageUrl = (link.image_url || '')
+    .trim()
+    .slice(0, MAX_LINK_URL_LENGTH);
+  const safeFavicon =
+    (link.favicon || '').trim().slice(0, MAX_LINK_URL_LENGTH) ||
+    '/favicon.ico';
 
   try {
     await setDoc(doc(db, 'links', linkId), {
       id: linkId,
       user_id: safeUid,
-      folder_id: targetFolderId,
-      url: (link.url || 'https://example.com').slice(0, MAX_LINK_URL_LENGTH),
-      domain: (link.domain || 'example.com').slice(0, MAX_LINK_DOMAIN_LENGTH),
-      title: (link.title || link.domain || 'Saved Tab').slice(
-        0,
-        MAX_LINK_TITLE_LENGTH
-      ),
-      description: (link.description || '').slice(
-        0,
-        MAX_LINK_DESCRIPTION_LENGTH
-      ),
-      image_url: (link.image_url || '').slice(0, MAX_LINK_URL_LENGTH),
-      favicon: (link.favicon || '/favicon.ico').slice(0, MAX_LINK_URL_LENGTH),
+      folder_id: verifiedFolderId,
+      url: safeUrl,
+      domain: safeDomain,
+      title: safeTitle,
+      description: safeDescription,
+      image_url: safeImageUrl,
+      favicon: safeFavicon,
       status: sanitizeStatus(link.status),
-      order_index: Math.max(0, Math.min(10000, Number(link.order_index) || 0)),
+      order_index: Math.max(
+        0,
+        Math.min(10000, Math.round(Number(link.order_index) || 0))
+      ),
       reading_minutes: Math.max(
         1,
-        Math.min(1000, Number(link.reading_minutes) || 5)
+        Math.min(1000, Math.round(Number(link.reading_minutes) || 5))
       ),
       scrape_status:
         link.scrape_status === 'degraded' || link.scrape_status === 'manual'
@@ -641,6 +778,7 @@ export async function createLinkInFirestore(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    knownCloudLinkIds.add(linkId);
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
   }
@@ -657,6 +795,9 @@ export async function updateLinkInFirestore(
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeId = sanitizeId(linkId, 'lnk');
+  if (hasLoadedCloudLinks && !knownCloudLinkIds.has(safeId)) {
+    return;
+  }
   const path = `links/${safeId}`;
   const updatePayload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
@@ -673,7 +814,11 @@ export async function updateLinkInFirestore(
     );
   }
   if (patch.folder_id !== undefined && patch.folder_id !== null) {
-    updatePayload.folder_id = sanitizeId(patch.folder_id, 'fld');
+    const safeFolderId = sanitizeId(patch.folder_id, 'fld');
+    if (hasLoadedCloudFolders && !knownCloudFolderIds.has(safeFolderId)) {
+      return;
+    }
+    updatePayload.folder_id = safeFolderId;
   }
   if (patch.status !== undefined) {
     updatePayload.status = sanitizeStatus(patch.status);
@@ -700,6 +845,10 @@ export async function updateLinkInFirestore(
 export async function deleteLinkInFirestore(linkId: string): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeId = sanitizeId(linkId, 'lnk');
+  if (hasLoadedCloudLinks && !knownCloudLinkIds.has(safeId)) {
+    return;
+  }
+  knownCloudLinkIds.delete(safeId);
   const path = `links/${safeId}`;
   try {
     await deleteDoc(doc(db, 'links', safeId));

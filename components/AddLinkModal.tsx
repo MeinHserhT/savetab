@@ -1,10 +1,20 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Link2, Loader2, Upload, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  ArrowUpRight,
+  FolderOpen,
+  Link2,
+  Loader2,
+  RotateCcw,
+  Upload,
+  X,
+} from 'lucide-react';
 import { useLinkStore } from '@/store/useLinkStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
-import { LinkStatus } from '@/lib/types';
+import { findDuplicateLinkByUrl } from '@/lib/kanban-rules';
+import { LinkItem, LinkStatus } from '@/lib/types';
 import { parseTabGroupFromDataTransfer } from '@/lib/tab-group-drop';
 
 interface AddLinkModalProps {
@@ -14,26 +24,55 @@ interface AddLinkModalProps {
   onClose: () => void;
 }
 
+interface DuplicateAlertState {
+  link: LinkItem;
+  groupName: string;
+}
+
 export function AddLinkModal({
   isOpen,
   defaultStatus = LinkStatus.UNREAD,
   defaultFolderId = null,
   onClose,
 }: AddLinkModalProps) {
-  const { folders, activeFolderId, addLink, isScraping } = useLinkStore();
+  const {
+    links,
+    folders,
+    activeFolderId,
+    addLink,
+    setActiveFolderId,
+    isScraping,
+  } = useLinkStore();
   const { t } = useLanguageStore();
 
   const [url, setUrl] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [submittedDuplicate, setSubmittedDuplicate] =
+    useState<DuplicateAlertState | null>(null);
 
   const targetFolderId =
     defaultFolderId ?? activeFolderId ?? folders[0]?.id ?? null;
+
+  const matchedDuplicate = useMemo(() => {
+    const trimmed = url.trim();
+    if (!trimmed || trimmed.length < 4) return null;
+    return findDuplicateLinkByUrl(trimmed, links, folders);
+  }, [url, links, folders]);
+
+  const duplicateGroupName = useMemo(() => {
+    if (!matchedDuplicate) return '';
+    return (
+      folders.find((f) => f.id === matchedDuplicate.folder_id)?.name ||
+      t.sidebar.allSavedTabs
+    );
+  }, [matchedDuplicate, folders, t]);
 
   useEffect(() => {
     if (isOpen) {
       setValidationError(null);
       setIsDragOver(false);
+      setSubmittedDuplicate(null);
     }
   }, [isOpen]);
 
@@ -49,6 +88,16 @@ export function AddLinkModal({
 
   if (!isOpen) return null;
 
+  const handleViewExistingGroup = (dupLink: LinkItem) => {
+    if (dupLink.folder_id) {
+      setActiveFolderId(dupLink.folder_id);
+    }
+    useLinkStore.setState({ highlightedLinkId: dupLink.id });
+    setSubmittedDuplicate(null);
+    setUrl('');
+    onClose();
+  };
+
   const saveUrl = async (rawUrl: string) => {
     const trimmed = rawUrl.trim();
     if (!trimmed) {
@@ -57,6 +106,8 @@ export function AddLinkModal({
     }
 
     setValidationError(null);
+    const preDetectedDuplicate = findDuplicateLinkByUrl(trimmed, links, folders);
+
     const created = await addLink({
       url: trimmed,
       folder_id: targetFolderId,
@@ -64,7 +115,25 @@ export function AddLinkModal({
       status: defaultStatus,
     });
 
+    const latestState = useLinkStore.getState();
+    const isDuplicateNotice =
+      latestState.workspaceNotice?.kind === 'duplicate-removed';
+    const effectiveDuplicate =
+      preDetectedDuplicate || (isDuplicateNotice ? created : null);
+
+    if (effectiveDuplicate) {
+      const resolvedGroupName =
+        latestState.folders.find((f) => f.id === effectiveDuplicate.folder_id)
+          ?.name || t.sidebar.allSavedTabs;
+      setSubmittedDuplicate({
+        link: effectiveDuplicate,
+        groupName: resolvedGroupName,
+      });
+      return;
+    }
+
     if (created) {
+      setSubmittedDuplicate(null);
       setUrl('');
       onClose();
     }
@@ -89,6 +158,12 @@ export function AddLinkModal({
     setUrl(droppedUrl);
     await saveUrl(droppedUrl);
   };
+
+  const activeDuplicateAlert: DuplicateAlertState | null =
+    submittedDuplicate ||
+    (matchedDuplicate
+      ? { link: matchedDuplicate, groupName: duplicateGroupName }
+      : null);
 
   return (
     <div
@@ -137,7 +212,9 @@ export function AddLinkModal({
             className={`rounded-md border border-dashed p-3 transition-colors ${
               isDragOver
                 ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
-                : 'border-[var(--tf-border)] bg-[var(--tf-surface)]'
+                : activeDuplicateAlert
+                  ? 'border-amber-500/70 bg-amber-500/5'
+                  : 'border-[var(--tf-border)] bg-[var(--tf-surface)]'
             }`}
           >
             <div className="flex items-center gap-2">
@@ -150,6 +227,7 @@ export function AddLinkModal({
                 onChange={(e) => {
                   setUrl(e.target.value.slice(0, 2048));
                   if (validationError) setValidationError(null);
+                  if (submittedDuplicate) setSubmittedDuplicate(null);
                 }}
                 placeholder={t.addModal.urlPlaceholder}
                 className="flex-1 px-3 py-2 text-xs bg-[var(--tf-canvas)] border border-[var(--tf-border)] rounded-md text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
@@ -172,6 +250,81 @@ export function AddLinkModal({
             </p>
           </div>
 
+          {activeDuplicateAlert && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              data-testid="add-modal-duplicate-alert"
+              className="p-3 rounded-lg border-2 border-amber-500/80 bg-amber-500/15 shadow-md space-y-2.5 text-xs text-amber-800 dark:text-amber-200"
+            >
+              <div className="flex items-start gap-2.5">
+                <span className="p-1.5 rounded-md bg-amber-500 text-amber-950 shrink-0 mt-0.5">
+                  <AlertTriangle className="w-4 h-4" />
+                </span>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="font-bold text-amber-900 dark:text-amber-100 leading-tight">
+                    {t.board.duplicateAlertTitle}
+                  </p>
+                  <p className="leading-snug text-amber-800 dark:text-amber-200">
+                    {submittedDuplicate
+                      ? t.addModal.duplicateSubmittedDesc(
+                          activeDuplicateAlert.link.title ||
+                            activeDuplicateAlert.link.domain,
+                          activeDuplicateAlert.groupName
+                        )
+                      : t.addModal.duplicateUrlWarning(
+                          activeDuplicateAlert.link.title ||
+                            activeDuplicateAlert.link.domain,
+                          activeDuplicateAlert.groupName
+                        )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="px-2.5 py-2 rounded-md bg-[var(--tf-canvas)]/90 border border-amber-500/40 flex items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold text-[var(--tf-text)] truncate">
+                    {activeDuplicateAlert.link.title ||
+                      activeDuplicateAlert.link.domain}
+                  </p>
+                  <p className="text-[11px] text-[var(--tf-text-muted)] font-mono truncate">
+                    {activeDuplicateAlert.link.url}
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40 shrink-0">
+                  <FolderOpen className="w-3 h-3" />
+                  <span className="max-w-[120px] truncate">
+                    {activeDuplicateAlert.groupName}
+                  </span>
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubmittedDuplicate(null);
+                    setUrl('');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] bg-[var(--tf-surface)] hover:bg-[var(--tf-canvas)] border border-[var(--tf-border)] transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{t.addModal.tryAnotherUrl}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleViewExistingGroup(activeDuplicateAlert.link)
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold bg-amber-500 hover:bg-amber-400 text-amber-950 transition-colors shadow-xs"
+                >
+                  <span>{t.board.viewGroupBtn}</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {validationError && (
             <p role="alert" className="text-xs text-rose-500">
               {validationError}
@@ -182,3 +335,4 @@ export function AddLinkModal({
     </div>
   );
 }
+

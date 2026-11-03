@@ -1,7 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { Folder, LinkItem, LinkStatus, TabGroupColor, User } from './types';
 import {
+  Folder,
+  LinkItem,
+  LinkStatus,
+  TAB_GROUP_COLORS,
+  TabGroupColor,
+  User,
+} from './types';
+import {
+  consolidateLinksAcrossGroups,
+  findDuplicateLinkByUrl,
+  findExistingGroupForLinkSource,
   isLegacyMockLink,
   isLegacySeedFolder,
   moveAndReorderGroupLinks,
@@ -26,16 +36,7 @@ const DB_FILE_PATH = path.join(process.cwd(), '.data', 'tabflow-db.json');
 
 let memoryStore: DatabaseState | null = null;
 
-const DEFAULT_COLORS: TabGroupColor[] = [
-  'blue',
-  'amber',
-  'rose',
-  'emerald',
-  'cyan',
-  'purple',
-  'orange',
-  'zinc',
-];
+const DEFAULT_COLORS = TAB_GROUP_COLORS;
 
 function loadStore(): DatabaseState {
   if (memoryStore) return memoryStore;
@@ -133,7 +134,22 @@ export function getDatabaseSnapshot(userId: string = DEFAULT_USER.id): {
   const folders = store.folders
     .filter((f) => f.user_id === userId)
     .sort((a, b) => a.order_index - b.order_index);
-  const links = store.links.filter((l) => l.user_id === userId);
+  let links = store.links.filter((l) => l.user_id === userId);
+
+  const consolidated = consolidateLinksAcrossGroups(links, folders);
+  if (
+    consolidated.movedLinks.length > 0 ||
+    consolidated.removedDuplicateLinks.length > 0 ||
+    consolidated.updatedKeptLinks.length > 0
+  ) {
+    links = consolidated.links;
+    const otherLinks = store.links.filter((l) => l.user_id !== userId);
+    persistStore({
+      ...store,
+      links: [...links, ...otherLinks],
+    });
+  }
+
   return {
     users: store.users,
     folders,
@@ -156,10 +172,45 @@ export function insertLink(
   const userFolders = store.folders
     .filter((f) => f.user_id === userId)
     .sort((a, b) => a.order_index - b.order_index);
+  const userLinks = store.links.filter((l) => l.user_id === userId);
+
+  const existingDuplicate = findDuplicateLinkByUrl(
+    input.url,
+    userLinks,
+    userFolders
+  );
+  if (existingDuplicate) {
+    const updatedDuplicate = updateLinkById(
+      existingDuplicate.id,
+      {
+        channel_name:
+          existingDuplicate.channel_name || input.channel_name || null,
+        video_duration:
+          existingDuplicate.video_duration || input.video_duration || null,
+        image_url: existingDuplicate.image_url || input.image_url || null,
+      },
+      userId
+    );
+    return updatedDuplicate.link ?? existingDuplicate;
+  }
+
+  const matchedExistingFolderId = findExistingGroupForLinkSource(
+    {
+      id: '__new__',
+      url: input.url,
+      domain: input.domain,
+      channel_name: input.channel_name ?? null,
+      description: input.description,
+    },
+    userLinks,
+    userFolders
+  );
+
   let targetFolderId =
-    input.folder_id && userFolders.some((f) => f.id === input.folder_id)
+    matchedExistingFolderId ??
+    (input.folder_id && userFolders.some((f) => f.id === input.folder_id)
       ? input.folder_id
-      : (userFolders[0]?.id ?? null);
+      : (userFolders[0]?.id ?? null));
 
   if (!targetFolderId) {
     const defaultFolder: Folder = {
@@ -250,6 +301,10 @@ export function updateLinkById(
     Object.entries(restPatch).filter(([, value]) => value !== undefined)
   );
 
+  const userFolders = store.folders
+    .filter((f) => f.user_id === userId)
+    .sort((a, b) => a.order_index - b.order_index);
+
   let userLinks = store.links
     .filter((item) => item.user_id === userId)
     .map((item) =>
@@ -262,15 +317,31 @@ export function updateLinkById(
         : item
     );
 
+  const updatedCandidate = userLinks.find((item) => item.id === id);
+  const autoMatchedFolderId =
+    restPatch.folder_id === undefined &&
+    target_link_id === undefined &&
+    position === undefined &&
+    (restPatch.channel_name !== undefined || restPatch.description !== undefined) &&
+    updatedCandidate
+      ? findExistingGroupForLinkSource(
+          updatedCandidate,
+          userLinks,
+          userFolders,
+          id
+        )
+      : null;
+
   if (
     target_link_id !== undefined ||
     position !== undefined ||
-    restPatch.folder_id !== undefined
+    restPatch.folder_id !== undefined ||
+    (autoMatchedFolderId && autoMatchedFolderId !== existing.folder_id)
   ) {
     const targetFolderId =
       restPatch.folder_id !== undefined
         ? restPatch.folder_id
-        : existing.folder_id;
+        : autoMatchedFolderId ?? existing.folder_id;
     userLinks = moveAndReorderGroupLinks(userLinks, {
       linkId: id,
       targetFolderId,

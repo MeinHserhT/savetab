@@ -51,7 +51,7 @@ service cloud.firestore {
         data.user_id == request.auth.uid &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.color is string && data.color.size() >= 1 && data.color.size() <= 20 &&
-        data.color in ['blue', 'cyan', 'emerald', 'amber', 'orange', 'red', 'rose', 'purple', 'indigo', 'zinc'] &&
+        data.color in ['blue', 'ocean', 'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose', 'crimson', 'red', 'coral', 'orange', 'amber', 'gold', 'yellow', 'lime', 'green', 'emerald', 'mint', 'teal', 'cyan', 'bronze', 'slate', 'zinc'] &&
         data.collapsed is bool &&
         data.order_index is int && data.order_index >= 0 && data.order_index <= 10000 &&
         data.createdAt is timestamp &&
@@ -185,7 +185,7 @@ service cloud.firestore {
 
       allow delete: if isVerifiedUser() &&
         isValidId(folderId) &&
-        existing().user_id == request.auth.uid;
+        (resource == null || existing().user_id == request.auth.uid);
     }
 
     // 6. Collection Rules: /links/{linkId}
@@ -219,14 +219,17 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']) ||
           // Action 2: Move link across groups or reorder
           incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'status', 'order_index', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'order_index', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'order_index', 'updatedAt']) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt'])
+          incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
+          // Action 3: Combined metadata and group consolidation update
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'folder_id', 'status', 'order_index', 'updatedAt'])
         );
 
       allow delete: if isVerifiedUser() &&
         isValidId(linkId) &&
-        existing().user_id == request.auth.uid;
+        (resource == null || existing().user_id == request.auth.uid);
     }
   }
 }

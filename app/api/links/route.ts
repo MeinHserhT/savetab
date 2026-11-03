@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabaseSnapshot, insertLink, updateLinkById } from '@/lib/db';
+import { findDuplicateLinkByUrl } from '@/lib/kanban-rules';
 import {
   extractYouTubeChannelName,
   extractYouTubeVideoId,
@@ -155,25 +156,61 @@ export async function POST(request: NextRequest) {
         ? (body.status as LinkStatus)
         : LinkStatus.UNREAD;
 
-    const created = insertLink({
-      user_id: userId,
-      url: scraped.url,
-      domain: scraped.domain,
-      title: customTitle,
-      description: customDescription,
-      image_url:
-        typeof body.image_url === 'string' && body.image_url.trim()
-          ? body.image_url.trim()
-          : scraped.image_url,
-      favicon: scraped.favicon,
-      folder_id: folderId,
-      tags: tags.length > 0 ? tags : ['reference'],
-      reading_minutes: scraped.reading_minutes,
-      video_duration: scraped.video_duration ?? null,
-      channel_name: scraped.channel_name ?? null,
-      scrape_status: scraped.scrape_status,
-      status,
-    });
+    const preSnapshot = getDatabaseSnapshot(userId);
+    const preExistingDuplicate = findDuplicateLinkByUrl(
+      scraped.url,
+      preSnapshot.links,
+      preSnapshot.folders
+    );
+
+    const created = preExistingDuplicate
+      ? updateLinkById(
+          preExistingDuplicate.id,
+          {
+            title:
+              !isGenericPlaceholderTitle(customTitle) &&
+              isGenericPlaceholderTitle(preExistingDuplicate.title)
+                ? customTitle
+                : preExistingDuplicate.title,
+            description:
+              preExistingDuplicate.description || customDescription,
+            image_url:
+              preExistingDuplicate.image_url ||
+              (typeof body.image_url === 'string' && body.image_url.trim()
+                ? body.image_url.trim()
+                : scraped.image_url),
+            reading_minutes:
+              preExistingDuplicate.reading_minutes || scraped.reading_minutes,
+            video_duration:
+              preExistingDuplicate.video_duration ||
+              scraped.video_duration ||
+              null,
+            channel_name:
+              preExistingDuplicate.channel_name ||
+              scraped.channel_name ||
+              null,
+          },
+          userId
+        ) ?? preExistingDuplicate
+      : insertLink({
+          user_id: userId,
+          url: scraped.url,
+          domain: scraped.domain,
+          title: customTitle,
+          description: customDescription,
+          image_url:
+            typeof body.image_url === 'string' && body.image_url.trim()
+              ? body.image_url.trim()
+              : scraped.image_url,
+          favicon: scraped.favicon,
+          folder_id: folderId,
+          tags: tags.length > 0 ? tags : ['reference'],
+          reading_minutes: scraped.reading_minutes,
+          video_duration: scraped.video_duration ?? null,
+          channel_name: scraped.channel_name ?? null,
+          scrape_status: scraped.scrape_status,
+          status,
+        });
 
     const snapshot = getDatabaseSnapshot(userId);
     const response = NextResponse.json(
@@ -181,6 +218,7 @@ export async function POST(request: NextRequest) {
         link: created,
         links: snapshot.links,
         folders: snapshot.folders,
+        duplicateOfLinkId: preExistingDuplicate?.id ?? null,
         scrapeDiagnostics: scraped.diagnostics,
       },
       { status: 201 }

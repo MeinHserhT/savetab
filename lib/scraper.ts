@@ -297,87 +297,96 @@ async function fetchYouTubeInnertubePlayerDetails(
     },
   ];
 
-  for (const client of clients) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, 3500));
-      const response = await fetch(
-        'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': BROWSER_USER_AGENT,
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            videoId,
-            context: { client },
-          }),
-          signal: controller.signal,
-        }
-      );
-      clearTimeout(timer);
+  const perClientTimeout = Math.min(timeoutMs, 2200);
+  const results = await Promise.all(
+    clients.map(async (client) => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), perClientTimeout);
+        const response = await fetch(
+          'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': BROWSER_USER_AGENT,
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              videoId,
+              context: { client },
+            }),
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
 
-      if (!response.ok) continue;
-      const data = (await response.json()) as {
-        videoDetails?: {
-          lengthSeconds?: string | number;
-          title?: string;
-          author?: string;
-        };
-        microformat?: {
-          playerMicroformatRenderer?: {
+        if (!response.ok) return null;
+        const data = (await response.json()) as {
+          videoDetails?: {
             lengthSeconds?: string | number;
+            title?: string;
+            author?: string;
+          };
+          microformat?: {
+            playerMicroformatRenderer?: {
+              lengthSeconds?: string | number;
+            };
+          };
+          streamingData?: {
+            formats?: Array<{ approxDurationMs?: string }>;
+            adaptiveFormats?: Array<{ approxDurationMs?: string }>;
           };
         };
-        streamingData?: {
-          formats?: Array<{ approxDurationMs?: string }>;
-          adaptiveFormats?: Array<{ approxDurationMs?: string }>;
-        };
-      };
 
-      const rawApproxMs =
-        data?.streamingData?.formats?.[0]?.approxDurationMs ??
-        data?.streamingData?.adaptiveFormats?.[0]?.approxDurationMs;
-      const approxSec =
-        rawApproxMs !== undefined
-          ? Math.floor(Number(rawApproxMs) / 1000)
-          : NaN;
+        const rawApproxMs =
+          data?.streamingData?.formats?.[0]?.approxDurationMs ??
+          data?.streamingData?.adaptiveFormats?.[0]?.approxDurationMs;
+        const approxSec =
+          rawApproxMs !== undefined
+            ? Math.floor(Number(rawApproxMs) / 1000)
+            : NaN;
 
-      const rawLength =
-        data?.videoDetails?.lengthSeconds ??
-        data?.microformat?.playerMicroformatRenderer?.lengthSeconds;
-      const lengthSec = rawLength !== undefined ? Number(rawLength) : NaN;
+        const rawLength =
+          data?.videoDetails?.lengthSeconds ??
+          data?.microformat?.playerMicroformatRenderer?.lengthSeconds;
+        const lengthSec = rawLength !== undefined ? Number(rawLength) : NaN;
 
-      // YouTube videoDetails.lengthSeconds is Math.ceil(durationMs / 1000) (+1s compared to player UI Math.floor)
-      const adjustedLengthSec =
-        Number.isFinite(lengthSec) && lengthSec > 0
-          ? lengthSec > 1
-            ? lengthSec - 1
-            : lengthSec
-          : null;
+        const adjustedLengthSec =
+          Number.isFinite(lengthSec) && lengthSec > 0
+            ? lengthSec > 1
+              ? lengthSec - 1
+              : lengthSec
+            : null;
 
-      const validDuration =
-        Number.isFinite(approxSec) && approxSec > 0
-          ? approxSec
-          : adjustedLengthSec;
-      const validTitle = cleanScrapedTitle(data?.videoDetails?.title);
-      const validAuthor = data?.videoDetails?.author?.trim() || null;
+        const validDuration =
+          Number.isFinite(approxSec) && approxSec > 0
+            ? approxSec
+            : adjustedLengthSec;
+        const validTitle = cleanScrapedTitle(data?.videoDetails?.title);
+        const validAuthor = data?.videoDetails?.author?.trim() || null;
 
-      if (validDuration || validTitle) {
-        return {
-          durationSeconds: validDuration,
-          title: validTitle,
-          author: validAuthor,
-        };
+        if (validDuration || validTitle) {
+          return {
+            durationSeconds: validDuration,
+            title: validTitle,
+            author: validAuthor,
+          };
+        }
+      } catch {
+        // Ignore single client error
       }
-    } catch {
-      // Try next Innertube client context
-    }
-  }
+      return null;
+    })
+  );
 
-  return { durationSeconds: null, title: null, author: null };
+  const bestWithDuration = results.find(
+    (r): r is NonNullable<typeof r> => Boolean(r && r.durationSeconds)
+  );
+  if (bestWithDuration) return bestWithDuration;
+
+  const firstValid = results.find((r): r is NonNullable<typeof r> => Boolean(r));
+  return firstValid ?? { durationSeconds: null, title: null, author: null };
 }
 
 function parseDurationTimestampToSeconds(raw: string): number | null {
@@ -407,78 +416,72 @@ async function fetchYouTubeSearchDurationSeconds(
   const queries = Array.from(
     new Set(
       [
-        videoId.startsWith('-') || videoId.includes('_') || videoId.includes('-')
-          ? cleanHint
-            ? `${cleanHint} "${videoId}"`
-            : `"${videoId}"`
-          : `"${videoId}"`,
-        cleanHint ? `${cleanHint} ${videoId}` : null,
-        cleanHint || null,
+        cleanHint ? `${cleanHint} "${videoId}"` : `"${videoId}"`,
         videoId,
       ].filter((q): q is string => Boolean(q && q.trim()))
     )
-  );
+  ).slice(0, 2);
 
   const escapedId = videoId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const boundedTimeout = Math.min(timeoutMs, 2000);
 
-  for (const query of queries) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        Math.max(timeoutMs, 4500)
-      );
-      const response = await fetch(
-        'https://www.youtube.com/youtubei/v1/search?prettyPrint=false',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': BROWSER_USER_AGENT,
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            query,
-            context: {
-              client: {
-                clientName: 'WEB',
-                clientVersion: '2.20250201.01.00',
-                hl: 'en',
-                gl: 'US',
-              },
+  const results = await Promise.all(
+    queries.map(async (query) => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), boundedTimeout);
+        const response = await fetch(
+          'https://www.youtube.com/youtubei/v1/search?prettyPrint=false',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': BROWSER_USER_AGENT,
+              Accept: 'application/json',
             },
-          }),
-          signal: controller.signal,
+            body: JSON.stringify({
+              query,
+              context: {
+                client: {
+                  clientName: 'WEB',
+                  clientVersion: '2.20250201.01.00',
+                  hl: 'en',
+                  gl: 'US',
+                },
+              },
+            }),
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timer);
+
+        if (!response.ok) return null;
+        const text = await response.text();
+        const rendererMatch = text.match(
+          new RegExp(`"videoRenderer"\\s*:\\s*\\{"videoId"\\s*:\\s*"${escapedId}"`)
+        );
+        if (!rendererMatch || rendererMatch.index === undefined) return null;
+
+        const slice = text.slice(rendererMatch.index, rendererMatch.index + 3500);
+        const lenIdx = slice.indexOf('"lengthText":');
+        if (lenIdx === -1) return null;
+
+        const lenSlice = slice.slice(lenIdx, lenIdx + 350);
+        const simpleMatch = lenSlice.match(/"simpleText"\s*:\s*"([0-9:]+)"/);
+        if (simpleMatch?.[1]) {
+          const rawSec = parseDurationTimestampToSeconds(simpleMatch[1]);
+          if (rawSec && rawSec > 0) {
+            return rawSec > 1 ? rawSec - 1 : rawSec;
+          }
         }
-      );
-      clearTimeout(timer);
-
-      if (!response.ok) continue;
-      const text = await response.text();
-      const rendererMatch = text.match(
-        new RegExp(`"videoRenderer"\\s*:\\s*\\{"videoId"\\s*:\\s*"${escapedId}"`)
-      );
-      if (!rendererMatch || rendererMatch.index === undefined) continue;
-
-      const slice = text.slice(rendererMatch.index, rendererMatch.index + 3500);
-      const lenIdx = slice.indexOf('"lengthText":');
-      if (lenIdx === -1) continue;
-
-      const lenSlice = slice.slice(lenIdx, lenIdx + 350);
-      const simpleMatch = lenSlice.match(/"simpleText"\s*:\s*"([0-9:]+)"/);
-      if (simpleMatch?.[1]) {
-        const rawSec = parseDurationTimestampToSeconds(simpleMatch[1]);
-        if (rawSec && rawSec > 0) {
-          // YouTube search videoRenderer.lengthText rounds fractional seconds up by +1s compared to player bar
-          return rawSec > 1 ? rawSec - 1 : rawSec;
-        }
+      } catch {
+        // Ignore single search attempt error
       }
-    } catch {
-      // Try next search query
-    }
-  }
+      return null;
+    })
+  );
 
-  return null;
+  return results.find((sec): sec is number => Boolean(sec && sec > 0)) ?? null;
 }
 
 async function fetchYouTubeWatchHtmlDurationSeconds(
@@ -486,41 +489,32 @@ async function fetchYouTubeWatchHtmlDurationSeconds(
   timeoutMs: number
 ): Promise<number | null> {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=en`;
-  const userAgents = [
-    'Twitterbot/1.0',
-    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-    BROWSER_USER_AGENT,
-  ];
+  const boundedTimeout = Math.min(timeoutMs, 2200);
 
-  for (const ua of userAgents) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        Math.max(timeoutMs, 5500)
-      );
-      const response = await fetch(watchUrl, {
-        method: 'GET',
-        headers: {
-          'User-Agent': ua,
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+417',
-        },
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (response.ok) {
-        const html = await response.text();
-        const durationSec = extractVideoDurationSeconds(html);
-        if (durationSec && durationSec > 0) {
-          return durationSec > 1 ? durationSec - 1 : durationSec;
-        }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), boundedTimeout);
+    const response = await fetch(watchUrl, {
+      method: 'GET',
+      headers: {
+        'User-Agent': BROWSER_USER_AGENT,
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Cookie: 'CONSENT=YES+cb.20210328-17-p0.en+FX+417',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (response.ok) {
+      const html = await response.text();
+      const durationSec = extractVideoDurationSeconds(html);
+      if (durationSec && durationSec > 0) {
+        return durationSec > 1 ? durationSec - 1 : durationSec;
       }
-    } catch {
-      // Try next User-Agent
     }
+  } catch {
+    // Ignore watch HTML timeout
   }
   return null;
 }
@@ -734,18 +728,15 @@ export async function scrapeUrlMetadata(
         : null;
 
     if (!resolvedDurationSec) {
-      resolvedDurationSec = await fetchYouTubeSearchDurationSeconds(
-        ytVideoId,
-        oembedMeta?.title || innertube.title,
-        timeoutMs
-      );
-    }
-
-    if (!resolvedDurationSec) {
-      resolvedDurationSec = await fetchYouTubeWatchHtmlDurationSeconds(
-        ytVideoId,
-        timeoutMs
-      );
+      const [searchSec, watchSec] = await Promise.all([
+        fetchYouTubeSearchDurationSeconds(
+          ytVideoId,
+          oembedMeta?.title || innertube.title,
+          timeoutMs
+        ),
+        fetchYouTubeWatchHtmlDurationSeconds(ytVideoId, timeoutMs),
+      ]);
+      resolvedDurationSec = searchSec || watchSec || null;
     }
 
     if (oembedMeta) {

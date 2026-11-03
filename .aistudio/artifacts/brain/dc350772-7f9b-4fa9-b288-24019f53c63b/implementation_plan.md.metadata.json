@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch loại bỏ icon nguồn nhỏ bên phải mỗi tab và bổ sung khung preview Tab Hover Card chuẩn Google Chrome (hiển thị tiêu đề đầy đủ và tên miền ngay bên dưới/cạnh tab khi rê chuột).",
-  "updatedAt":  "2026-10-30T04:12:33.531737854Z",
+  "summary":  "Implementation plan for automatic cross-group tab consolidation by matching YouTube channel or website domain into the earliest existing group.",
+  "updatedAt":  "2026-10-30T09:25:52.604406385Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

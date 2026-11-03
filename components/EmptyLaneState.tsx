@@ -1,11 +1,21 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Check, ClipboardPaste, Globe, Loader2, Plus, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  AlertTriangle,
+  Check,
+  ClipboardPaste,
+  Globe,
+  Loader2,
+  Plus,
+  X,
+} from 'lucide-react';
 import { Folder, TabGroupColor } from '@/lib/types';
 import { getTabGroupStyles } from '@/components/KanbanBoard';
+import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { findDuplicateLinkByUrl } from '@/lib/kanban-rules';
 
 interface EmptyLaneStateProps {
   group: Folder;
@@ -25,11 +35,26 @@ export function EmptyLaneState({
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
+  const { links, folders } = useLinkStore();
   const { mode } = useThemeStore();
   const { t } = useLanguageStore();
   const groupStyles = getTabGroupStyles(mode);
   const colorKey: TabGroupColor = group.color ?? 'blue';
   const style = groupStyles[colorKey] ?? groupStyles.blue;
+
+  const matchedDuplicate = useMemo(() => {
+    const trimmed = inlineUrl.trim();
+    if (!trimmed || trimmed.length < 4) return null;
+    return findDuplicateLinkByUrl(trimmed, links, folders);
+  }, [inlineUrl, links, folders]);
+
+  const duplicateGroupName = useMemo(() => {
+    if (!matchedDuplicate) return '';
+    return (
+      folders.find((f) => f.id === matchedDuplicate.folder_id)?.name ||
+      t.sidebar.allSavedTabs
+    );
+  }, [matchedDuplicate, folders, t]);
 
   const isLikelyUrl = (text: string) => {
     const trimmed = text.trim();
@@ -136,41 +161,58 @@ export function EmptyLaneState({
       {showInlineInput && (
         <form
           onSubmit={handleInlineSubmit}
-          className="pt-2 border-t border-[var(--tf-border)] flex items-center gap-1.5"
+          className="pt-2 border-t border-[var(--tf-border)] space-y-2"
         >
-          <input
-            type="text"
-            value={inlineUrl}
-            onChange={(e) => setInlineUrl(e.target.value)}
-            aria-label={t.emptyLane.quickInputAria(group.name)}
-            placeholder={t.emptyLane.quickInputPlaceholder}
-            autoFocus
-            className="flex-1 min-w-0 px-2.5 py-1 text-xs bg-[var(--tf-surface)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
-          />
-          <button
-            type="submit"
-            disabled={isSaving}
-            aria-label={t.emptyLane.saveQuickAria(group.name)}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-[var(--tf-text)] hover:opacity-90 text-[var(--tf-canvas)] rounded transition-opacity whitespace-nowrap shrink-0"
-          >
-            {isSaving ? (
-              <Loader2 className="w-3 h-3 animate-spin" />
-            ) : (
-              <Check className="w-3 h-3" />
-            )}
-            <span>{t.emptyLane.save}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowInlineInput(false);
-              setFeedbackError(null);
-            }}
-            aria-label={t.emptyLane.cancelQuickAria}
-            className="p-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] rounded hover:bg-[var(--tf-surface)]"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={inlineUrl}
+              onChange={(e) => setInlineUrl(e.target.value)}
+              aria-label={t.emptyLane.quickInputAria(group.name)}
+              placeholder={t.emptyLane.quickInputPlaceholder}
+              autoFocus
+              className="flex-1 min-w-0 px-2.5 py-1 text-xs bg-[var(--tf-surface)] border border-[var(--tf-border)] rounded text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
+            />
+            <button
+              type="submit"
+              disabled={isSaving}
+              aria-label={t.emptyLane.saveQuickAria(group.name)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-[var(--tf-text)] hover:opacity-90 text-[var(--tf-canvas)] rounded transition-opacity whitespace-nowrap shrink-0"
+            >
+              {isSaving ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Check className="w-3 h-3" />
+              )}
+              <span>{t.emptyLane.save}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowInlineInput(false);
+                setFeedbackError(null);
+              }}
+              aria-label={t.emptyLane.cancelQuickAria}
+              className="p-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] rounded hover:bg-[var(--tf-surface)]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {matchedDuplicate && (
+            <div
+              role="alert"
+              className="p-2 rounded border border-amber-500/60 bg-amber-500/15 flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-300"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+              <span className="leading-snug font-medium">
+                {t.addModal.duplicateUrlWarning(
+                  matchedDuplicate.title || matchedDuplicate.domain,
+                  duplicateGroupName
+                )}
+              </span>
+            </div>
+          )}
         </form>
       )}
 

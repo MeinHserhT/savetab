@@ -63,6 +63,7 @@ export default function RootLayout({
   return (
     <html
       lang="vi"
+      suppressHydrationWarning
       className={`dark ${plusJakarta.variable} ${beVietnamPro.variable} ${jetbrainsMono.variable}`}
     >
       <body

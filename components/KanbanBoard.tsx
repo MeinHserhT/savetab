@@ -3,20 +3,34 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Clock,
   ExternalLink,
   FolderPlus,
   Globe,
   GripVertical,
+  Hash,
+  Image as ImageIcon,
+  LayoutGrid,
+  List,
   MoreVertical,
   Play,
   Plus,
   X,
 } from 'lucide-react';
+import { useDroppable } from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
+import { useWorkspaceDnd } from '@/components/WorkspaceDndProvider';
 import {
   clusterGroupLinksBySource,
   filterLinks,
@@ -25,7 +39,13 @@ import {
   sortGroupLinks,
   TabSubGroup,
 } from '@/lib/kanban-rules';
-import { Folder, LinkItem, LinkStatus, TabGroupColor } from '@/lib/types';
+import {
+  Folder,
+  LinkItem,
+  LinkStatus,
+  TAB_GROUP_COLORS,
+  TabGroupColor,
+} from '@/lib/types';
 import { ThemeMode } from '@/lib/theme';
 import { EmptyLaneState } from '@/components/EmptyLaneState';
 import {
@@ -51,168 +71,406 @@ export interface TabGroupStyleEntry {
 }
 
 export const TAB_GROUP_STYLES: Record<TabGroupColor, TabGroupStyleEntry> = {
-  blue: {
-    label: 'Blue',
-    dot: 'bg-sky-400',
-    badgeBg: 'bg-sky-500/20 border-sky-400/45',
-    badgeText: 'text-sky-200',
-    topBar: 'bg-sky-400',
-    borderHover: 'hover:border-sky-400/60',
-  },
-  cyan: {
-    label: 'Cyan',
-    dot: 'bg-cyan-400',
-    badgeBg: 'bg-cyan-500/20 border-cyan-400/45',
-    badgeText: 'text-cyan-200',
-    topBar: 'bg-cyan-400',
-    borderHover: 'hover:border-cyan-400/60',
-  },
-  emerald: {
-    label: 'Green',
-    dot: 'bg-emerald-400',
-    badgeBg: 'bg-emerald-500/20 border-emerald-400/45',
-    badgeText: 'text-emerald-200',
-    topBar: 'bg-emerald-400',
-    borderHover: 'hover:border-emerald-400/60',
-  },
-  amber: {
-    label: 'Yellow',
-    dot: 'bg-amber-400',
-    badgeBg: 'bg-amber-500/20 border-amber-400/45',
-    badgeText: 'text-amber-200',
-    topBar: 'bg-amber-400',
-    borderHover: 'hover:border-amber-400/60',
-  },
-  orange: {
-    label: 'Orange',
-    dot: 'bg-orange-400',
-    badgeBg: 'bg-orange-500/20 border-orange-400/45',
-    badgeText: 'text-orange-200',
-    topBar: 'bg-orange-400',
-    borderHover: 'hover:border-orange-400/60',
+  // Row 1: Warm Spectrum (Deep Red -> Bright Red -> Coral -> Orange -> Amber -> Yellow)
+  crimson: {
+    label: 'Crimson',
+    dot: 'bg-[#B91C1C]',
+    badgeBg: 'bg-[#B91C1C]/30 border-[#DC2626]/60',
+    badgeText: 'text-red-200',
+    topBar: 'bg-[#B91C1C]',
+    borderHover: 'hover:border-[#DC2626]/70',
   },
   red: {
     label: 'Red',
-    dot: 'bg-red-400',
-    badgeBg: 'bg-red-500/20 border-red-400/45',
+    dot: 'bg-[#FF3B30]',
+    badgeBg: 'bg-[#FF3B30]/20 border-[#FF3B30]/50',
     badgeText: 'text-red-200',
-    topBar: 'bg-red-400',
-    borderHover: 'hover:border-red-400/60',
+    topBar: 'bg-[#FF3B30]',
+    borderHover: 'hover:border-[#FF3B30]/65',
   },
-  rose: {
-    label: 'Pink',
-    dot: 'bg-rose-400',
-    badgeBg: 'bg-rose-500/20 border-rose-400/45',
-    badgeText: 'text-rose-200',
-    topBar: 'bg-rose-400',
-    borderHover: 'hover:border-rose-400/60',
+  coral: {
+    label: 'Coral',
+    dot: 'bg-[#FF6B4A]',
+    badgeBg: 'bg-[#FF6B4A]/20 border-[#FF6B4A]/50',
+    badgeText: 'text-orange-200',
+    topBar: 'bg-[#FF6B4A]',
+    borderHover: 'hover:border-[#FF6B4A]/65',
   },
-  purple: {
-    label: 'Purple',
-    dot: 'bg-purple-400',
-    badgeBg: 'bg-purple-500/20 border-purple-400/45',
-    badgeText: 'text-purple-200',
-    topBar: 'bg-purple-400',
-    borderHover: 'hover:border-purple-400/60',
+  orange: {
+    label: 'Orange',
+    dot: 'bg-[#FF8C00]',
+    badgeBg: 'bg-[#FF8C00]/20 border-[#FF8C00]/50',
+    badgeText: 'text-orange-200',
+    topBar: 'bg-[#FF8C00]',
+    borderHover: 'hover:border-[#FF8C00]/65',
+  },
+  amber: {
+    label: 'Amber',
+    dot: 'bg-[#FFB300]',
+    badgeBg: 'bg-[#FFB300]/20 border-[#FFB300]/50',
+    badgeText: 'text-amber-200',
+    topBar: 'bg-[#FFB300]',
+    borderHover: 'hover:border-[#FFB300]/65',
+  },
+  yellow: {
+    label: 'Yellow',
+    dot: 'bg-[#FFE600]',
+    badgeBg: 'bg-[#FFE600]/20 border-[#FFE600]/50',
+    badgeText: 'text-yellow-100',
+    topBar: 'bg-[#FFE600]',
+    borderHover: 'hover:border-[#FFE600]/65',
+  },
+
+  // Row 2: Green -> Teal -> Cyan Spectrum (Opposing Warm Row 1)
+  lime: {
+    label: 'Lime',
+    dot: 'bg-[#A3E635]',
+    badgeBg: 'bg-[#A3E635]/20 border-[#A3E635]/50',
+    badgeText: 'text-lime-200',
+    topBar: 'bg-[#A3E635]',
+    borderHover: 'hover:border-[#A3E635]/65',
+  },
+  green: {
+    label: 'Forest Green',
+    dot: 'bg-[#22C55E]',
+    badgeBg: 'bg-[#22C55E]/20 border-[#22C55E]/50',
+    badgeText: 'text-green-200',
+    topBar: 'bg-[#22C55E]',
+    borderHover: 'hover:border-[#22C55E]/65',
+  },
+  emerald: {
+    label: 'Emerald',
+    dot: 'bg-[#059669]',
+    badgeBg: 'bg-[#059669]/25 border-[#10B981]/50',
+    badgeText: 'text-emerald-200',
+    topBar: 'bg-[#059669]',
+    borderHover: 'hover:border-[#10B981]/65',
+  },
+  mint: {
+    label: 'Mint',
+    dot: 'bg-[#2DD4BF]',
+    badgeBg: 'bg-[#2DD4BF]/20 border-[#2DD4BF]/50',
+    badgeText: 'text-teal-100',
+    topBar: 'bg-[#2DD4BF]',
+    borderHover: 'hover:border-[#2DD4BF]/65',
+  },
+  teal: {
+    label: 'Teal',
+    dot: 'bg-[#0D9488]',
+    badgeBg: 'bg-[#0D9488]/25 border-[#14B8A6]/50',
+    badgeText: 'text-teal-200',
+    topBar: 'bg-[#0D9488]',
+    borderHover: 'hover:border-[#14B8A6]/65',
+  },
+  cyan: {
+    label: 'Cyan',
+    dot: 'bg-[#00D4FF]',
+    badgeBg: 'bg-[#00D4FF]/20 border-[#00D4FF]/50',
+    badgeText: 'text-cyan-100',
+    topBar: 'bg-[#00D4FF]',
+    borderHover: 'hover:border-[#00D4FF]/65',
+  },
+
+  // Row 3: Blue -> Indigo -> Violet -> Purple -> Fuchsia Spectrum (Opposing Yellows/Greens)
+  blue: {
+    label: 'Sky Blue',
+    dot: 'bg-[#38BDF8]',
+    badgeBg: 'bg-[#38BDF8]/20 border-[#38BDF8]/50',
+    badgeText: 'text-sky-200',
+    topBar: 'bg-[#38BDF8]',
+    borderHover: 'hover:border-[#38BDF8]/65',
+  },
+  ocean: {
+    label: 'Ocean Blue',
+    dot: 'bg-[#2563EB]',
+    badgeBg: 'bg-[#2563EB]/25 border-[#3B82F6]/55',
+    badgeText: 'text-blue-200',
+    topBar: 'bg-[#2563EB]',
+    borderHover: 'hover:border-[#3B82F6]/65',
   },
   indigo: {
     label: 'Indigo',
-    dot: 'bg-indigo-400',
-    badgeBg: 'bg-indigo-500/20 border-indigo-400/45',
+    dot: 'bg-[#4F46E5]',
+    badgeBg: 'bg-[#4F46E5]/25 border-[#6366F1]/55',
     badgeText: 'text-indigo-200',
-    topBar: 'bg-indigo-400',
-    borderHover: 'hover:border-indigo-400/60',
+    topBar: 'bg-[#4F46E5]',
+    borderHover: 'hover:border-[#6366F1]/65',
+  },
+  violet: {
+    label: 'Violet',
+    dot: 'bg-[#7C3AED]',
+    badgeBg: 'bg-[#7C3AED]/25 border-[#8B5CF6]/55',
+    badgeText: 'text-violet-200',
+    topBar: 'bg-[#7C3AED]',
+    borderHover: 'hover:border-[#8B5CF6]/65',
+  },
+  purple: {
+    label: 'Purple',
+    dot: 'bg-[#A855F7]',
+    badgeBg: 'bg-[#A855F7]/20 border-[#A855F7]/50',
+    badgeText: 'text-purple-200',
+    topBar: 'bg-[#A855F7]',
+    borderHover: 'hover:border-[#A855F7]/65',
+  },
+  fuchsia: {
+    label: 'Fuchsia',
+    dot: 'bg-[#E81CFF]',
+    badgeBg: 'bg-[#E81CFF]/20 border-[#E81CFF]/50',
+    badgeText: 'text-fuchsia-200',
+    topBar: 'bg-[#E81CFF]',
+    borderHover: 'hover:border-[#E81CFF]/65',
+  },
+
+  // Row 4: Rose -> Pink & Contrasting Metallics / Neutrals
+  rose: {
+    label: 'Rose',
+    dot: 'bg-[#F43F5E]',
+    badgeBg: 'bg-[#F43F5E]/20 border-[#F43F5E]/50',
+    badgeText: 'text-rose-200',
+    topBar: 'bg-[#F43F5E]',
+    borderHover: 'hover:border-[#F43F5E]/65',
+  },
+  pink: {
+    label: 'Soft Pink',
+    dot: 'bg-[#FF7EB6]',
+    badgeBg: 'bg-[#FF7EB6]/20 border-[#FF7EB6]/50',
+    badgeText: 'text-pink-200',
+    topBar: 'bg-[#FF7EB6]',
+    borderHover: 'hover:border-[#FF7EB6]/65',
+  },
+  gold: {
+    label: 'Gold',
+    dot: 'bg-[#D4AF37]',
+    badgeBg: 'bg-[#D4AF37]/25 border-[#D4AF37]/55',
+    badgeText: 'text-amber-100',
+    topBar: 'bg-[#D4AF37]',
+    borderHover: 'hover:border-[#D4AF37]/65',
+  },
+  bronze: {
+    label: 'Bronze',
+    dot: 'bg-[#A0522D]',
+    badgeBg: 'bg-[#A0522D]/25 border-[#C08457]/55',
+    badgeText: 'text-orange-200',
+    topBar: 'bg-[#A0522D]',
+    borderHover: 'hover:border-[#C08457]/65',
+  },
+  slate: {
+    label: 'Slate',
+    dot: 'bg-[#475569]',
+    badgeBg: 'bg-[#475569]/30 border-[#64748B]/55',
+    badgeText: 'text-slate-200',
+    topBar: 'bg-[#475569]',
+    borderHover: 'hover:border-[#64748B]/65',
   },
   zinc: {
-    label: 'Grey',
-    dot: 'bg-slate-400',
-    badgeBg: 'bg-slate-500/25 border-slate-400/45',
-    badgeText: 'text-slate-200',
-    topBar: 'bg-slate-400',
-    borderHover: 'hover:border-slate-400/60',
+    label: 'Warm Grey',
+    dot: 'bg-[#9CA3AF]',
+    badgeBg: 'bg-[#9CA3AF]/20 border-[#9CA3AF]/50',
+    badgeText: 'text-zinc-200',
+    topBar: 'bg-[#9CA3AF]',
+    borderHover: 'hover:border-[#9CA3AF]/65',
   },
 };
 
 export const LIGHT_TAB_GROUP_STYLES: Record<TabGroupColor, TabGroupStyleEntry> = {
-  blue: {
-    label: 'Blue',
-    dot: 'bg-sky-500',
-    badgeBg: 'bg-sky-500/15 border-sky-600/35',
-    badgeText: 'text-sky-800',
-    topBar: 'bg-sky-500',
-    borderHover: 'hover:border-sky-500/60',
-  },
-  cyan: {
-    label: 'Cyan',
-    dot: 'bg-cyan-500',
-    badgeBg: 'bg-cyan-500/15 border-cyan-600/35',
-    badgeText: 'text-cyan-800',
-    topBar: 'bg-cyan-500',
-    borderHover: 'hover:border-cyan-500/60',
-  },
-  emerald: {
-    label: 'Green',
-    dot: 'bg-emerald-500',
-    badgeBg: 'bg-emerald-500/15 border-emerald-600/35',
-    badgeText: 'text-emerald-800',
-    topBar: 'bg-emerald-500',
-    borderHover: 'hover:border-emerald-500/60',
-  },
-  amber: {
-    label: 'Yellow',
-    dot: 'bg-amber-500',
-    badgeBg: 'bg-amber-500/15 border-amber-600/35',
-    badgeText: 'text-amber-800',
-    topBar: 'bg-amber-500',
-    borderHover: 'hover:border-amber-500/60',
-  },
-  orange: {
-    label: 'Orange',
-    dot: 'bg-orange-500',
-    badgeBg: 'bg-orange-500/15 border-orange-600/35',
-    badgeText: 'text-orange-800',
-    topBar: 'bg-orange-500',
-    borderHover: 'hover:border-orange-500/60',
+  // Row 1: Warm Spectrum
+  crimson: {
+    label: 'Crimson',
+    dot: 'bg-[#991B1B]',
+    badgeBg: 'bg-[#991B1B]/15 border-[#991B1B]/40',
+    badgeText: 'text-red-950',
+    topBar: 'bg-[#991B1B]',
+    borderHover: 'hover:border-[#991B1B]/65',
   },
   red: {
     label: 'Red',
-    dot: 'bg-red-500',
-    badgeBg: 'bg-red-500/15 border-red-600/35',
+    dot: 'bg-[#EF4444]',
+    badgeBg: 'bg-[#EF4444]/15 border-[#DC2626]/40',
     badgeText: 'text-red-800',
-    topBar: 'bg-red-500',
-    borderHover: 'hover:border-red-500/60',
+    topBar: 'bg-[#EF4444]',
+    borderHover: 'hover:border-[#EF4444]/65',
   },
-  rose: {
-    label: 'Pink',
-    dot: 'bg-rose-500',
-    badgeBg: 'bg-rose-500/15 border-rose-600/35',
-    badgeText: 'text-rose-800',
-    topBar: 'bg-rose-500',
-    borderHover: 'hover:border-rose-500/60',
+  coral: {
+    label: 'Coral',
+    dot: 'bg-[#FF6B4A]',
+    badgeBg: 'bg-[#FF6B4A]/15 border-[#F0564A]/40',
+    badgeText: 'text-red-900',
+    topBar: 'bg-[#FF6B4A]',
+    borderHover: 'hover:border-[#FF6B4A]/65',
   },
-  purple: {
-    label: 'Purple',
-    dot: 'bg-purple-500',
-    badgeBg: 'bg-purple-500/15 border-purple-600/35',
-    badgeText: 'text-purple-800',
-    topBar: 'bg-purple-500',
-    borderHover: 'hover:border-purple-500/60',
+  orange: {
+    label: 'Orange',
+    dot: 'bg-[#F97316]',
+    badgeBg: 'bg-[#F97316]/15 border-[#EA580C]/40',
+    badgeText: 'text-orange-900',
+    topBar: 'bg-[#F97316]',
+    borderHover: 'hover:border-[#F97316]/65',
+  },
+  amber: {
+    label: 'Amber',
+    dot: 'bg-[#F59E0B]',
+    badgeBg: 'bg-[#F59E0B]/15 border-[#D97706]/40',
+    badgeText: 'text-amber-900',
+    topBar: 'bg-[#F59E0B]',
+    borderHover: 'hover:border-[#F59E0B]/65',
+  },
+  yellow: {
+    label: 'Yellow',
+    dot: 'bg-[#EAB308]',
+    badgeBg: 'bg-[#FACC15]/20 border-[#CA8A04]/45',
+    badgeText: 'text-yellow-950',
+    topBar: 'bg-[#EAB308]',
+    borderHover: 'hover:border-[#EAB308]/65',
+  },
+
+  // Row 2: Green -> Cyan Spectrum
+  lime: {
+    label: 'Lime',
+    dot: 'bg-[#84CC16]',
+    badgeBg: 'bg-[#84CC16]/15 border-[#65A30D]/40',
+    badgeText: 'text-lime-900',
+    topBar: 'bg-[#84CC16]',
+    borderHover: 'hover:border-[#84CC16]/65',
+  },
+  green: {
+    label: 'Forest Green',
+    dot: 'bg-[#16A34A]',
+    badgeBg: 'bg-[#16A34A]/15 border-[#15803D]/40',
+    badgeText: 'text-green-900',
+    topBar: 'bg-[#16A34A]',
+    borderHover: 'hover:border-[#16A34A]/65',
+  },
+  emerald: {
+    label: 'Emerald',
+    dot: 'bg-[#047857]',
+    badgeBg: 'bg-[#047857]/15 border-[#047857]/40',
+    badgeText: 'text-emerald-950',
+    topBar: 'bg-[#047857]',
+    borderHover: 'hover:border-[#047857]/65',
+  },
+  mint: {
+    label: 'Mint',
+    dot: 'bg-[#14B8A6]',
+    badgeBg: 'bg-[#14B8A6]/15 border-[#0D9488]/40',
+    badgeText: 'text-teal-900',
+    topBar: 'bg-[#14B8A6]',
+    borderHover: 'hover:border-[#14B8A6]/65',
+  },
+  teal: {
+    label: 'Teal',
+    dot: 'bg-[#0F766E]',
+    badgeBg: 'bg-[#0F766E]/15 border-[#0F766E]/40',
+    badgeText: 'text-teal-950',
+    topBar: 'bg-[#0F766E]',
+    borderHover: 'hover:border-[#0F766E]/65',
+  },
+  cyan: {
+    label: 'Cyan',
+    dot: 'bg-[#06B6D4]',
+    badgeBg: 'bg-[#06B6D4]/15 border-[#0891B2]/40',
+    badgeText: 'text-cyan-900',
+    topBar: 'bg-[#06B6D4]',
+    borderHover: 'hover:border-[#06B6D4]/65',
+  },
+
+  // Row 3: Blue -> Purple -> Fuchsia Spectrum
+  blue: {
+    label: 'Sky Blue',
+    dot: 'bg-[#0EA5E9]',
+    badgeBg: 'bg-[#0EA5E9]/15 border-[#0284C7]/40',
+    badgeText: 'text-sky-900',
+    topBar: 'bg-[#0EA5E9]',
+    borderHover: 'hover:border-[#0EA5E9]/65',
+  },
+  ocean: {
+    label: 'Ocean Blue',
+    dot: 'bg-[#1D4ED8]',
+    badgeBg: 'bg-[#1D4ED8]/15 border-[#1E40AF]/40',
+    badgeText: 'text-blue-950',
+    topBar: 'bg-[#1D4ED8]',
+    borderHover: 'hover:border-[#1D4ED8]/65',
   },
   indigo: {
     label: 'Indigo',
-    dot: 'bg-indigo-500',
-    badgeBg: 'bg-indigo-500/15 border-indigo-600/35',
-    badgeText: 'text-indigo-800',
-    topBar: 'bg-indigo-500',
-    borderHover: 'hover:border-indigo-500/60',
+    dot: 'bg-[#4338CA]',
+    badgeBg: 'bg-[#4338CA]/15 border-[#3730A3]/40',
+    badgeText: 'text-indigo-950',
+    topBar: 'bg-[#4338CA]',
+    borderHover: 'hover:border-[#4338CA]/65',
+  },
+  violet: {
+    label: 'Violet',
+    dot: 'bg-[#6D28D9]',
+    badgeBg: 'bg-[#6D28D9]/15 border-[#5B21B6]/40',
+    badgeText: 'text-violet-950',
+    topBar: 'bg-[#6D28D9]',
+    borderHover: 'hover:border-[#6D28D9]/65',
+  },
+  purple: {
+    label: 'Purple',
+    dot: 'bg-[#9333EA]',
+    badgeBg: 'bg-[#9333EA]/15 border-[#7E22CE]/40',
+    badgeText: 'text-purple-900',
+    topBar: 'bg-[#9333EA]',
+    borderHover: 'hover:border-[#9333EA]/65',
+  },
+  fuchsia: {
+    label: 'Fuchsia',
+    dot: 'bg-[#D946EF]',
+    badgeBg: 'bg-[#D946EF]/15 border-[#C026D3]/40',
+    badgeText: 'text-fuchsia-900',
+    topBar: 'bg-[#D946EF]',
+    borderHover: 'hover:border-[#D946EF]/65',
+  },
+
+  // Row 4: Rose -> Pink & Contrasting Metallics / Neutrals
+  rose: {
+    label: 'Rose',
+    dot: 'bg-[#E11D48]',
+    badgeBg: 'bg-[#E11D48]/15 border-[#BE123C]/40',
+    badgeText: 'text-rose-900',
+    topBar: 'bg-[#E11D48]',
+    borderHover: 'hover:border-[#E11D48]/65',
+  },
+  pink: {
+    label: 'Soft Pink',
+    dot: 'bg-[#F472B6]',
+    badgeBg: 'bg-[#F472B6]/15 border-[#DB2777]/40',
+    badgeText: 'text-pink-900',
+    topBar: 'bg-[#F472B6]',
+    borderHover: 'hover:border-[#F472B6]/65',
+  },
+  gold: {
+    label: 'Gold',
+    dot: 'bg-[#B8860B]',
+    badgeBg: 'bg-[#B8860B]/15 border-[#9A6E08]/40',
+    badgeText: 'text-yellow-950',
+    topBar: 'bg-[#B8860B]',
+    borderHover: 'hover:border-[#B8860B]/65',
+  },
+  bronze: {
+    label: 'Bronze',
+    dot: 'bg-[#8B4513]',
+    badgeBg: 'bg-[#8B4513]/15 border-[#7C3F11]/40',
+    badgeText: 'text-amber-950',
+    topBar: 'bg-[#8B4513]',
+    borderHover: 'hover:border-[#8B4513]/65',
+  },
+  slate: {
+    label: 'Slate',
+    dot: 'bg-[#334155]',
+    badgeBg: 'bg-[#334155]/15 border-[#334155]/40',
+    badgeText: 'text-slate-900',
+    topBar: 'bg-[#334155]',
+    borderHover: 'hover:border-[#334155]/65',
   },
   zinc: {
-    label: 'Grey',
-    dot: 'bg-slate-500',
-    badgeBg: 'bg-slate-500/15 border-slate-500/40',
-    badgeText: 'text-slate-800',
-    topBar: 'bg-slate-500',
-    borderHover: 'hover:border-slate-400',
+    label: 'Warm Grey',
+    dot: 'bg-[#71717A]',
+    badgeBg: 'bg-[#71717A]/15 border-[#52525B]/40',
+    badgeText: 'text-zinc-800',
+    topBar: 'bg-[#71717A]',
+    borderHover: 'hover:border-[#71717A]/65',
   },
 };
 
@@ -222,18 +480,7 @@ export function getTabGroupStyles(
   return mode === 'light' ? LIGHT_TAB_GROUP_STYLES : TAB_GROUP_STYLES;
 }
 
-export const COLOR_KEYS: TabGroupColor[] = [
-  'blue',
-  'cyan',
-  'emerald',
-  'amber',
-  'orange',
-  'red',
-  'rose',
-  'purple',
-  'indigo',
-  'zinc',
-];
+export const COLOR_KEYS: TabGroupColor[] = [...TAB_GROUP_COLORS];
 
 function isUnresolvedYouTubeUrlAndTitle(url: string, title: string): boolean {
   const lowerUrl = url.toLowerCase();
@@ -268,10 +515,136 @@ function isVideoUrl(url: string): boolean {
   );
 }
 
+function extractYouTubeVideoId(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = parsed.pathname.split('/').filter(Boolean)[0];
+      return id && id.length >= 6 ? id : null;
+    }
+    if (host.includes('youtube.com')) {
+      const v = parsed.searchParams.get('v');
+      if (v) return v;
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      if (
+        (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live' || parts[0] === 'v') &&
+        parts[1]
+      ) {
+        return parts[1];
+      }
+    }
+  } catch {
+    // Ignore invalid URLs
+  }
+  return null;
+}
+
+const attemptedImageScrapeIds = new Set<string>();
+
+function FolderDroppableWrapper({
+  group,
+  className,
+  onClick,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  children,
+}: {
+  group: Folder;
+  className: string;
+  onClick: () => void;
+  onDragOver: (e: React.DragEvent<HTMLElement>) => void;
+  onDragLeave: (e: React.DragEvent<HTMLElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLElement>) => void;
+  children: React.ReactNode;
+}) {
+  const { t } = useLanguageStore();
+  const { setNodeRef } = useDroppable({
+    id: `folder-col:${group.id}`,
+    data: { type: 'folder', folderId: group.id, folder: group },
+  });
+
+  return (
+    <section
+      ref={setNodeRef}
+      id={`tab-group-col-${group.id}`}
+      aria-label={t.board.tabGroupAria(group.name)}
+      onClick={onClick}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={className}
+    >
+      {children}
+    </section>
+  );
+}
+
+function BottomNavFolderButton({
+  group,
+  style,
+  count,
+  isSelected,
+  isNativeDropTarget,
+  onClick,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+}: {
+  group: Folder;
+  style: TabGroupStyleEntry;
+  count: number;
+  isSelected: boolean;
+  isNativeDropTarget: boolean;
+  onClick: () => void;
+  onDragOver: (e: React.DragEvent<HTMLElement>) => void;
+  onDragLeave: (e: React.DragEvent<HTMLElement>) => void;
+  onDrop: (e: React.DragEvent<HTMLElement>) => void;
+}) {
+  const { activeLink, overFolderId } = useWorkspaceDnd();
+  const { setNodeRef, isOver } = useDroppable({
+    id: `bottom-folder:${group.id}`,
+    data: { type: 'folder', folderId: group.id, folder: group },
+  });
+
+  const isDropTarget =
+    isNativeDropTarget ||
+    (Boolean(activeLink) && (isOver || overFolderId === group.id));
+
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      onClick={onClick}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap shrink-0 border ${
+        isDropTarget
+          ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] text-[var(--tf-text)] scale-[1.02] ring-1 ring-[var(--tf-accent)]'
+          : isSelected
+          ? `${style.badgeBg} ${style.badgeText}`
+          : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)]'
+      }`}
+    >
+      <span className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`} />
+      <span className="max-w-[110px] sm:max-w-[140px] truncate">
+        {group.name}
+      </span>
+      <span className="font-mono text-[10px] tabular-nums opacity-75">
+        {count}
+      </span>
+    </button>
+  );
+}
+
 function TabLinkRow({
   link,
   groupId,
+  cardDensity = 'rich',
   isDragging,
+  isHighlighted,
   dropPosition,
   onUpdateLinkMeta,
   onDelete,
@@ -282,7 +655,9 @@ function TabLinkRow({
 }: {
   link: LinkItem;
   groupId: string;
+  cardDensity?: 'rich' | 'compact';
   isDragging: boolean;
+  isHighlighted?: boolean;
   dropPosition: 'before' | 'after' | null;
   onUpdateLinkMeta: (
     linkId: string,
@@ -291,6 +666,7 @@ function TabLinkRow({
         LinkItem,
         | 'title'
         | 'description'
+        | 'image_url'
         | 'reading_minutes'
         | 'video_duration'
         | 'channel_name'
@@ -312,6 +688,8 @@ function TabLinkRow({
   ) => void;
 }) {
   const [faviconFailed, setFaviconFailed] = useState(false);
+  const [coverImageFailed, setCoverImageFailed] = useState(false);
+  const [screenshotFailed, setScreenshotFailed] = useState(false);
   const [resolvedDuration, setResolvedDuration] = useState<string | null>(
     link.video_duration ?? null
   );
@@ -319,15 +697,52 @@ function TabLinkRow({
     resolveYouTubeChannelFromLink(link)
   );
   const { t } = useLanguageStore();
+  const { activeLink, overLinkId, overPosition } = useWorkspaceDnd();
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging: isDndDragging,
+  } = useSortable({
+    id: link.id,
+    data: {
+      type: 'link',
+      link,
+      groupId,
+    },
+  });
+
+  const effectiveIsDragging = isDragging || isDndDragging;
+  const effectiveDropPosition =
+    dropPosition ??
+    (activeLink && activeLink.id !== link.id && overLinkId === link.id
+      ? overPosition
+      : null);
+
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
 
   const effectiveVideoDuration = link.video_duration || resolvedDuration;
   const effectiveChannelName =
     resolveYouTubeChannelFromLink(link) || resolvedChannel;
   const isYt = isYouTubeLink(link.url, link.domain);
+  const ytVideoId = useMemo(() => extractYouTubeVideoId(link.url), [link.url]);
   const needsTitle = isUnresolvedYouTubeUrlAndTitle(link.url, link.title);
   const needsVideoDuration = isVideoUrl(link.url) && !effectiveVideoDuration;
   const needsYouTubeChannel = isYt && !effectiveChannelName;
+  const needsCoverImage =
+    !link.image_url && !ytVideoId && !attemptedImageScrapeIds.has(link.id);
   const needsCJKTranslation = !needsTitle && containsCJK(link.title);
+
+  React.useEffect(() => {
+    setCoverImageFailed(false);
+    setScreenshotFailed(false);
+  }, [link.image_url, link.url]);
 
   React.useEffect(() => {
     if (!needsCJKTranslation) return;
@@ -354,7 +769,15 @@ function TabLinkRow({
   }, [link.id, link.title, needsCJKTranslation, onUpdateLinkMeta]);
 
   React.useEffect(() => {
-    if (!needsTitle && !needsVideoDuration && !needsYouTubeChannel) return;
+    if (
+      !needsTitle &&
+      !needsVideoDuration &&
+      !needsYouTubeChannel &&
+      !needsCoverImage
+    ) {
+      return;
+    }
+    attemptedImageScrapeIds.add(link.id);
     let cancelled = false;
     fetch('/api/scrape', {
       method: 'POST',
@@ -369,6 +792,7 @@ function TabLinkRow({
             LinkItem,
             | 'title'
             | 'description'
+            | 'image_url'
             | 'reading_minutes'
             | 'video_duration'
             | 'channel_name'
@@ -379,6 +803,9 @@ function TabLinkRow({
           if (resolvedTitle && resolvedTitle !== link.title) {
             patch.title = resolvedTitle;
           }
+        }
+        if (!link.image_url && data.metadata.image_url) {
+          patch.image_url = String(data.metadata.image_url);
         }
         if (data.metadata.video_duration) {
           const dur = String(data.metadata.video_duration);
@@ -426,11 +853,13 @@ function TabLinkRow({
     link.url,
     link.domain,
     link.title,
+    link.image_url,
     link.channel_name,
     link.description,
     needsTitle,
     needsVideoDuration,
     needsYouTubeChannel,
+    needsCoverImage,
     onUpdateLinkMeta,
   ]);
 
@@ -452,14 +881,16 @@ function TabLinkRow({
   } | null>(null);
 
   const updateHoverPosition = useCallback(() => {
-    if (isDragging) return;
+    if (effectiveIsDragging) return;
     const el = rowRef.current;
     if (!el || typeof window === 'undefined') return;
     const rect = el.getBoundingClientRect();
-    const cardWidth = Math.min(Math.max(rect.width, 230), 300);
+    const cardWidth = Math.min(Math.max(rect.width, 250), 300);
     const maxLeft = Math.max(8, window.innerWidth - cardWidth - 8);
     const clampedLeft = Math.min(Math.max(8, rect.left), maxLeft);
-    const placeAbove = window.innerHeight - rect.bottom < 110 && rect.top > 120;
+    // Prefer showing the hover card below the tab unless near the very bottom of the viewport
+    const placeAbove =
+      window.innerHeight - rect.bottom < 220 && rect.top > 230;
     setHoverRect({
       top: rect.top,
       bottom: rect.bottom,
@@ -467,7 +898,7 @@ function TabLinkRow({
       width: cardWidth,
       placeAbove,
     });
-  }, [isDragging]);
+  }, [effectiveIsDragging]);
 
   useEffect(() => {
     if (!hoverRect) return;
@@ -483,10 +914,28 @@ function TabLinkRow({
   }, [hoverRect]);
 
   const cleanDomain = (link.domain || '').replace(/^www\./i, '');
+  const domainLabel =
+    isYt && effectiveChannelName ? effectiveChannelName : cleanDomain || link.domain;
+  const readingEstimateText =
+    effectiveVideoDuration ||
+    t.board.readingEstimateLabel(link.reading_minutes || 5);
+
+  const primaryImageUrl =
+    link.image_url ||
+    (ytVideoId ? `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg` : null);
+  const screenshotFallbackUrl = `https://s.wordpress.com/mshots/v1/${encodeURIComponent(
+    link.url
+  )}?w=600&h=340`;
+  const activePreviewImageUrl =
+    primaryImageUrl && !coverImageFailed
+      ? primaryImageUrl
+      : !screenshotFailed
+      ? screenshotFallbackUrl
+      : null;
 
   return (
-    <div className="relative">
-      {dropPosition === 'before' && (
+    <div ref={setNodeRef} style={sortableStyle} className="relative">
+      {effectiveDropPosition === 'before' && (
         <div
           aria-hidden="true"
           data-testid={`link-drop-indicator-before-${link.id}`}
@@ -499,6 +948,8 @@ function TabLinkRow({
 
       <article
         ref={rowRef}
+        {...attributes}
+        {...listeners}
         data-testid={`tab-link-card-${link.id}`}
         draggable
         onDragStart={(e) => {
@@ -512,64 +963,65 @@ function TabLinkRow({
         onMouseLeave={() => setHoverRect(null)}
         aria-label={link.title}
         className={`group relative rounded-md border transition-all cursor-grab active:cursor-grabbing overflow-hidden ${
-          isDragging
-            ? 'opacity-45 scale-[0.98] border-dashed border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
-            : dropPosition
+          effectiveIsDragging
+            ? 'opacity-40 scale-[0.98] border-dashed border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
+            : isHighlighted
+            ? 'border-amber-500 ring-2 ring-amber-500/70 bg-amber-500/15 shadow-md'
+            : effectiveDropPosition
             ? 'border-[var(--tf-accent)] bg-[var(--tf-card-hover)]'
             : 'border-[var(--tf-border)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] hover:border-[var(--tf-border-strong)]'
         }`}
       >
-        <div className="p-2.5 flex items-start justify-between gap-1.5 text-[11px]">
-          <span
-            aria-hidden="true"
-            className="mt-0.5 -ml-1 text-[var(--tf-text-muted)] opacity-0 group-hover:opacity-75 transition-opacity shrink-0"
-          >
-            <GripVertical className="w-3 h-3" />
-          </span>
-
-          {/* Browser Tab Favicon + Title + Domain/Channel */}
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            draggable={false}
-            className="flex items-start gap-2 min-w-0 flex-1 focus-visible:outline-none focus-visible:underline"
-          >
-            <span className="w-4 h-4 mt-0.5 rounded bg-[var(--tf-surface)] border border-[var(--tf-border)] flex items-center justify-center shrink-0 overflow-hidden">
-              {!faviconFailed && faviconUrl ? (
-                <img
-                  src={faviconUrl}
-                  alt=""
-                  draggable={false}
-                  referrerPolicy="no-referrer"
-                  onError={() => setFaviconFailed(true)}
-                  className="w-3 h-3 object-contain"
-                />
-              ) : (
-                <Globe className="w-2.5 h-2.5 text-[var(--tf-text-muted)]" />
-              )}
+        <div className="p-2.5 flex flex-col gap-2 text-[11px]">
+          <div className="flex items-start justify-between gap-1.5">
+            <span
+              aria-hidden="true"
+              className="mt-0.5 -ml-1 text-[var(--tf-text-muted)] opacity-45 group-hover:opacity-90 transition-opacity shrink-0"
+            >
+              <GripVertical className="w-3 h-3" />
             </span>
 
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <h3 className="text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug truncate">
-                {link.title}
-              </h3>
-              <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--tf-text-muted)]">
-                <span className="truncate text-[var(--tf-text-secondary)]">
-                  {isYt && effectiveChannelName ? effectiveChannelName : link.domain}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className="tabular-nums shrink-0">
-                  {effectiveVideoDuration || `${link.reading_minutes}m`}
-                </span>
-              </div>
-            </div>
-          </a>
+            {/* Favicon Placeholder + Title */}
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              draggable={false}
+              className="flex items-start gap-2 min-w-0 flex-1 focus-visible:outline-none focus-visible:underline"
+            >
+              <span
+                data-testid="link-favicon-slot"
+                className="w-4 h-4 mt-0.5 rounded-xs bg-[var(--tf-surface)] border border-[var(--tf-border)] flex items-center justify-center shrink-0 overflow-hidden"
+              >
+                {!faviconFailed && faviconUrl ? (
+                  <img
+                    src={faviconUrl}
+                    alt=""
+                    draggable={false}
+                    referrerPolicy="no-referrer"
+                    onError={() => setFaviconFailed(true)}
+                    className="w-3 h-3 object-contain"
+                  />
+                ) : (
+                  <Globe className="w-2.5 h-2.5 text-[var(--tf-text-muted)]" />
+                )}
+              </span>
 
-          {/* Right Action: Close/Delete Tab Button */}
-          <div className="flex items-center shrink-0">
+              <div className="min-w-0 flex-1">
+                <h3
+                  className={`text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug ${
+                    cardDensity === 'rich' ? 'line-clamp-2' : 'truncate'
+                  }`}
+                >
+                  {link.title}
+                </h3>
+              </div>
+            </a>
+
+            {/* Right Action: Close/Delete Tab Button */}
             <button
               type="button"
+              onPointerDown={(e) => e.stopPropagation()}
               onMouseEnter={(e) => {
                 e.stopPropagation();
                 setHoverRect(null);
@@ -579,15 +1031,34 @@ function TabLinkRow({
               }}
               onClick={() => onDelete(link.id)}
               aria-label={t.board.deleteLinkAria(link.title)}
-              className="p-0.5 text-[var(--tf-text-muted)] hover:text-rose-500 rounded hover:bg-[var(--tf-surface)] transition-colors"
+              className="p-0.5 text-[var(--tf-text-muted)] hover:text-rose-500 rounded hover:bg-[var(--tf-surface)] shrink-0 transition-colors"
             >
               <X className="w-3 h-3" />
             </button>
           </div>
+
+          {/* Swiss Minimalist Metadata Footer: Domain Pill + Reading Estimate */}
+          <div className="pl-4 flex items-center justify-between gap-2 pt-0.5">
+            <span
+              data-testid="link-domain-pill"
+              title={domainLabel}
+              className="inline-flex items-center px-1.5 py-0.5 rounded-xs text-[10px] font-mono bg-[var(--tf-surface)] border border-[var(--tf-border)] text-[var(--tf-text-secondary)] truncate max-w-[145px]"
+            >
+              {domainLabel}
+            </span>
+
+            <span
+              data-testid="link-reading-estimate"
+              className="inline-flex items-center gap-1 font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] shrink-0"
+            >
+              <Clock className="w-2.5 h-2.5 opacity-70" />
+              <span>{readingEstimateText}</span>
+            </span>
+          </div>
         </div>
       </article>
 
-      {dropPosition === 'after' && (
+      {effectiveDropPosition === 'after' && (
         <div
           aria-hidden="true"
           data-testid={`link-drop-indicator-after-${link.id}`}
@@ -599,7 +1070,7 @@ function TabLinkRow({
       )}
 
       {hoverRect &&
-        !isDragging &&
+        !effectiveIsDragging &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
@@ -614,16 +1085,69 @@ function TabLinkRow({
               width: `${hoverRect.width}px`,
               transform: hoverRect.placeAbove ? 'translateY(-100%)' : undefined,
             }}
-            className="z-[120] pointer-events-none rounded-xl border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] px-3.5 py-2.5 shadow-2xl transition-opacity duration-100"
+            className="z-[120] pointer-events-none rounded-xl border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-2xl overflow-hidden transition-opacity duration-100"
           >
-            <p className="text-[12px] font-semibold text-[var(--tf-text)] leading-snug whitespace-normal break-words">
-              {link.title}
-            </p>
-            <p className="mt-1.5 text-[11px] text-[var(--tf-text-muted)] truncate">
-              {isYt && effectiveChannelName
-                ? `${cleanDomain || 'youtube.com'} • ${effectiveChannelName}`
-                : cleanDomain || link.domain}
-            </p>
+            <div className="px-3.5 py-2.5">
+              <p className="text-[12px] font-semibold text-[var(--tf-text)] leading-snug whitespace-normal break-words">
+                {link.title}
+              </p>
+              <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[var(--tf-text-muted)]">
+                <span className="truncate">
+                  {isYt && effectiveChannelName
+                    ? `${cleanDomain || 'youtube.com'} • ${effectiveChannelName}`
+                    : cleanDomain || link.domain}
+                </span>
+                <span className="font-mono text-[10px] tabular-nums shrink-0">
+                  {readingEstimateText}
+                </span>
+              </div>
+            </div>
+
+            {/* Website Preview Image shown inside the bottom hover card */}
+            <div
+              data-testid="link-og-cover"
+              className="relative w-full h-32 sm:h-36 bg-[var(--tf-surface)] border-t border-[var(--tf-border)] overflow-hidden"
+            >
+              {activePreviewImageUrl ? (
+                <img
+                  src={activePreviewImageUrl}
+                  alt=""
+                  draggable={false}
+                  referrerPolicy="no-referrer"
+                  onError={() => {
+                    if (primaryImageUrl && !coverImageFailed) {
+                      setCoverImageFailed(true);
+                    } else {
+                      setScreenshotFailed(true);
+                    }
+                  }}
+                  className="w-full h-full object-cover object-top"
+                />
+              ) : (
+                <div
+                  data-testid="link-og-placeholder"
+                  className="w-full h-full flex flex-col justify-between p-3 bg-[var(--tf-surface)] text-[var(--tf-text-muted)]"
+                >
+                  <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-[0.08em]">
+                    <span className="truncate max-w-[160px]">
+                      {cleanDomain || 'OPENGRAPH'}
+                    </span>
+                    <span className="inline-flex items-center gap-1 shrink-0 opacity-75">
+                      <ImageIcon className="w-2.5 h-2.5" />
+                      <span>OG</span>
+                    </span>
+                  </div>
+                  <div className="flex items-end justify-between gap-2">
+                    <span className="text-xl font-semibold tracking-tight text-[var(--tf-text-secondary)] opacity-35 font-mono uppercase leading-none">
+                      {(cleanDomain || link.title || 'TF').slice(0, 2)}
+                    </span>
+                    <span className="text-[9px] font-mono tabular-nums opacity-60">
+                      {t.board.ogCoverPlaceholderLabel}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>,
           document.body
         )}
@@ -634,7 +1158,9 @@ function TabLinkRow({
 function TabSubGroupBlock({
   subGroup,
   groupId,
+  cardDensity,
   draggedLinkId,
+  highlightedLinkId,
   linkDropTarget,
   onUpdateLinkMeta,
   onDelete,
@@ -645,7 +1171,9 @@ function TabSubGroupBlock({
 }: {
   subGroup: TabSubGroup;
   groupId: string;
+  cardDensity: 'rich' | 'compact';
   draggedLinkId: string | null;
+  highlightedLinkId?: string | null;
   linkDropTarget: {
     linkId: string;
     groupId: string;
@@ -658,6 +1186,7 @@ function TabSubGroupBlock({
         LinkItem,
         | 'title'
         | 'description'
+        | 'image_url'
         | 'reading_minutes'
         | 'video_duration'
         | 'channel_name'
@@ -733,13 +1262,15 @@ function TabSubGroupBlock({
         </span>
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         {subGroup.links.map((link) => (
           <TabLinkRow
             key={link.id}
             link={link}
             groupId={groupId}
+            cardDensity={cardDensity}
             isDragging={draggedLinkId === link.id}
+            isHighlighted={highlightedLinkId === link.id}
             dropPosition={
               linkDropTarget?.groupId === groupId &&
               linkDropTarget?.linkId === link.id &&
@@ -768,13 +1299,20 @@ export function KanbanBoard({
     links,
     folders,
     activeFolderId,
+    activeTag,
+    cardDensity,
     newlyCreatedGroupId,
     isImportingGroup,
     isLoading,
     errorMessage,
+    workspaceNotice,
+    highlightedLinkId,
     setActiveFolderId,
+    setActiveTag,
+    setCardDensity,
     clearNewlyCreatedGroupId,
     clearError,
+    clearNotice,
     addLink,
     updateLink,
     reorderLink,
@@ -787,6 +1325,16 @@ export function KanbanBoard({
 
   const { mode } = useThemeStore();
   const { t } = useLanguageStore();
+  const {
+    activeLink: dndActiveLink,
+    overFolderId: dndOverFolderId,
+    isOverNewGroupZone: dndIsOverNewGroupZone,
+  } = useWorkspaceDnd();
+  const { setNodeRef: setNewGroupDropNodeRef, isOver: isDndOverNewGroup } =
+    useDroppable({
+      id: 'new-group-drop-zone',
+      data: { type: 'new-group' },
+    });
   const groupStyles = getTabGroupStyles(mode);
 
   // Drag & Drop + Bottom Nav Focus + Inline Group Rename State
@@ -822,6 +1370,27 @@ export function KanbanBoard({
     });
     return () => cancelAnimationFrame(rafId);
   }, [activeFolderId]);
+
+  useEffect(() => {
+    if (!workspaceNotice?.id) return;
+    if (workspaceNotice.folderId) {
+      setFocusedGroupId(workspaceNotice.folderId);
+      requestAnimationFrame(() => {
+        const colEl = document.getElementById(
+          `tab-group-col-${workspaceNotice.folderId}`
+        );
+        colEl?.scrollIntoView({
+          behavior: 'smooth',
+          inline: 'center',
+          block: 'nearest',
+        });
+      });
+    }
+    const timer = window.setTimeout(() => {
+      clearNotice();
+    }, 9000);
+    return () => window.clearTimeout(timer);
+  }, [workspaceNotice?.id, workspaceNotice?.folderId, clearNotice]);
 
   // Auto-scroll and focus + select the inline rename input whenever a new Tab Group is created via drop/import
   useEffect(() => {
@@ -906,21 +1475,36 @@ export function KanbanBoard({
       ) {
         event.preventDefault();
         void handleCreateGroupFromParsedPayload(parsed);
+      } else if (parsed.tabs.length === 1) {
+        event.preventDefault();
+        const state = useLinkStore.getState();
+        const targetFolderId =
+          state.activeFolderId ??
+          focusedGroupId ??
+          state.folders[0]?.id ??
+          null;
+        void addLink({
+          url: parsed.tabs[0].url,
+          title: parsed.tabs[0].title,
+          folder_id: targetFolderId,
+          tags: ['saved-tab'],
+          status: LinkStatus.UNREAD,
+        });
       }
     };
 
     window.addEventListener('paste', handleGlobalPaste);
     return () => window.removeEventListener('paste', handleGlobalPaste);
-  }, [handleCreateGroupFromParsedPayload]);
+  }, [handleCreateGroupFromParsedPayload, addLink, focusedGroupId]);
 
   const filteredLinks = useMemo(
     () =>
       filterLinks(links, folders, {
         folderId: null,
-        tag: null,
+        tag: activeTag,
         searchQuery: '',
       }),
-    [links, folders]
+    [links, folders, activeTag]
   );
 
   const folderIdSet = useMemo(
@@ -1375,6 +1959,23 @@ export function KanbanBoard({
     }
   };
 
+  const noticeMessage = workspaceNotice
+    ? workspaceNotice.kind === 'duplicate-removed'
+      ? t.board.duplicateWebsiteNotice(
+          workspaceNotice.sourceLabel,
+          workspaceNotice.groupName
+        )
+      : workspaceNotice.kind === 'old-duplicates-cleaned'
+      ? t.board.removedOldDuplicatesNotice(workspaceNotice.removedCount ?? 1)
+      : t.board.sameWebsiteGroupedNotice(
+          workspaceNotice.sourceLabel,
+          workspaceNotice.groupName
+        )
+    : '';
+  const isDuplicateNotice =
+    workspaceNotice?.kind === 'duplicate-removed' ||
+    workspaceNotice?.kind === 'old-duplicates-cleaned';
+
   return (
     <div
       onWheel={handleBoardWheel}
@@ -1397,7 +1998,179 @@ export function KanbanBoard({
         </div>
       )}
 
-      {/* Google Chrome Tab Groups Column Board */}
+      {workspaceNotice && (
+        <>
+          <div
+            role="alert"
+            aria-live="assertive"
+            data-testid="workspace-notice-banner"
+            className={`mx-3 sm:mx-6 mt-3 sm:mt-4 px-3.5 py-2.5 rounded-lg border flex items-center justify-between gap-3 text-xs shrink-0 shadow-sm ${
+              isDuplicateNotice
+                ? mode === 'light'
+                  ? 'bg-amber-500/15 border-amber-500/60 text-amber-950'
+                  : 'bg-amber-500/20 border-amber-400/60 text-amber-200'
+                : mode === 'light'
+                ? 'bg-sky-500/15 border-sky-500/60 text-sky-950'
+                : 'bg-sky-500/20 border-sky-400/60 text-sky-200'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <AlertTriangle
+                className={`w-4 h-4 shrink-0 ${
+                  isDuplicateNotice ? 'text-amber-500' : 'text-sky-500'
+                }`}
+              />
+              <span className="font-semibold leading-snug">{noticeMessage}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {workspaceNotice.folderId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (workspaceNotice.folderId) {
+                      handleSelectBottomTab(workspaceNotice.folderId);
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-md border border-current/40 bg-current/10 hover:bg-current/20 text-[11px] font-semibold transition-colors whitespace-nowrap"
+                >
+                  {t.board.viewGroupBtn}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={clearNotice}
+                aria-label={t.board.dismissNoticeAria}
+                className="hover:opacity-80 p-0.5"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* High-Visibility Floating Alert Toast Overlay */}
+          <div
+            role="alert"
+            aria-live="assertive"
+            data-testid="duplicate-alert-toast"
+            className="fixed top-14 left-1/2 -translate-x-1/2 z-[110] w-[calc(100vw-1.5rem)] max-w-lg pointer-events-auto"
+          >
+            <div
+              className={`rounded-xl border px-4 py-3 shadow-2xl flex items-start justify-between gap-3 ${
+                isDuplicateNotice
+                  ? mode === 'light'
+                    ? 'bg-[#FFFDF5] border-amber-500 text-amber-950'
+                    : 'bg-[#1D170B] border-amber-400/80 text-amber-100'
+                  : mode === 'light'
+                  ? 'bg-[#F5FAFF] border-sky-500 text-sky-950'
+                  : 'bg-[#0C1926] border-sky-400/80 text-sky-100'
+              }`}
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                <span
+                  className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
+                    isDuplicateNotice
+                      ? 'bg-amber-500/20 text-amber-500'
+                      : 'bg-sky-500/20 text-sky-500'
+                  }`}
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                </span>
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-xs font-bold tracking-tight">
+                    {isDuplicateNotice
+                      ? t.board.duplicateAlertTitle
+                      : t.board.sameWebsiteAlertTitle}
+                  </p>
+                  <p className="text-xs leading-relaxed opacity-95">
+                    {noticeMessage}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {workspaceNotice.folderId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (workspaceNotice.folderId) {
+                        handleSelectBottomTab(workspaceNotice.folderId);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-md border border-current/35 bg-current/10 hover:bg-current/20 text-[11px] font-semibold transition-colors whitespace-nowrap"
+                  >
+                    {t.board.viewGroupBtn}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={clearNotice}
+                  aria-label={t.board.dismissNoticeAria}
+                  className="p-1 rounded-md hover:bg-current/10 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Swiss Minimalist Board Sub-Toolbar: Tag Filter Indicator & Rich/Compact Card Density Switch */}
+      <div className="px-3 sm:px-4 lg:px-6 pt-2.5 pb-1.5 border-b border-[var(--tf-border)] bg-[var(--tf-surface)]/45 flex items-center justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          {activeTag ? (
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-xs border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] text-[11px] font-mono text-[var(--tf-text)]">
+              <Hash className="w-3 h-3 text-[var(--tf-accent)] shrink-0" />
+              <span className="truncate">{t.board.filteredByTagLabel(activeTag)}</span>
+              <button
+                type="button"
+                onClick={() => setActiveTag(null)}
+                aria-label={t.sidebar.clearTagFilter}
+                className="ml-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)]"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <span className="text-[11px] font-mono text-[var(--tf-text-muted)] tabular-nums truncate">
+              {visibleGroups.length} · {filteredLinks.length} {t.sidebar.tabUnit}
+            </span>
+          )}
+        </div>
+
+        <div
+          role="group"
+          aria-label="Card density"
+          className="inline-flex items-center rounded-md border border-[var(--tf-border)] bg-[var(--tf-surface)] p-0.5 shrink-0"
+        >
+          <button
+            type="button"
+            onClick={() => setCardDensity('rich')}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-medium transition-colors ${
+              cardDensity === 'rich'
+                ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
+                : 'text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] border border-transparent'
+            }`}
+          >
+            <LayoutGrid className="w-3 h-3" />
+            <span>{t.board.cardViewRich}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setCardDensity('compact')}
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-medium transition-colors ${
+              cardDensity === 'compact'
+                ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
+                : 'text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] border border-transparent'
+            }`}
+          >
+            <List className="w-3 h-3" />
+            <span>{t.board.cardViewCompact}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Google Chrome Tab Groups Board */}
       <div
         ref={boardScrollRef}
         onDragOver={(e) => {
@@ -1504,65 +2277,67 @@ export function KanbanBoard({
         )}
 
         {visibleGroups.map((group) => {
-          const colorKey: TabGroupColor = group.color ?? 'blue';
-          const style = groupStyles[colorKey] ?? groupStyles.blue;
-          const groupLinks = sortGroupLinks(
-            group.id === '__ungrouped__'
-              ? filteredLinks.filter(
-                  (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
-                )
-              : filteredLinks.filter((l) => l.folder_id === group.id)
-          );
-          const isDropTarget = dragOverGroupId === group.id;
-          const isDraggingThisGroup = draggedFolderId === group.id;
-          const isGroupReorderTarget =
-            folderDropTarget?.groupId === group.id &&
-            draggedFolderId !== group.id;
-          const reorderPosition = isGroupReorderTarget
-            ? folderDropTarget?.position
-            : null;
-          const isFocused =
-            focusedGroupId === group.id || activeFolderId === group.id;
-          const isEditingName = editingGroupId === group.id;
+              const colorKey: TabGroupColor = group.color ?? 'blue';
+              const style = groupStyles[colorKey] ?? groupStyles.blue;
+              const groupLinks = sortGroupLinks(
+                group.id === '__ungrouped__'
+                  ? filteredLinks.filter(
+                      (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
+                    )
+                  : filteredLinks.filter((l) => l.folder_id === group.id)
+              );
+              const isDropTarget =
+                dragOverGroupId === group.id ||
+                (Boolean(dndActiveLink) && dndOverFolderId === group.id);
+              const isDraggingThisGroup = draggedFolderId === group.id;
+              const isGroupReorderTarget =
+                folderDropTarget?.groupId === group.id &&
+                draggedFolderId !== group.id;
+              const reorderPosition = isGroupReorderTarget
+                ? folderDropTarget?.position
+                : null;
+              const isFocused =
+                focusedGroupId === group.id || activeFolderId === group.id;
+              const isEditingName = editingGroupId === group.id;
 
-          return (
-            <section
-              key={group.id}
-              id={`tab-group-col-${group.id}`}
-              aria-label={t.board.tabGroupAria(group.name)}
-              onClick={() => {
-                setFocusedGroupId(group.id);
-                if (group.id !== '__ungrouped__') {
-                  setActiveFolderId(group.id);
-                }
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                if (isFolderDragEvent(e)) {
-                  e.dataTransfer.dropEffect = 'move';
-                  if (
-                    group.id !== '__ungrouped__' &&
-                    draggedFolderId !== group.id
-                  ) {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    const nextPos: 'before' | 'after' =
-                      e.clientX < rect.left + rect.width / 2
-                        ? 'before'
-                        : 'after';
-                    if (
-                      folderDropTarget?.groupId !== group.id ||
-                      folderDropTarget.position !== nextPos
-                    ) {
-                      setFolderDropTarget({
-                        groupId: group.id,
-                        position: nextPos,
-                      });
+              return (
+                <FolderDroppableWrapper
+                  key={group.id}
+                  group={group}
+                  onClick={() => {
+                    setFocusedGroupId(group.id);
+                    if (group.id !== '__ungrouped__') {
+                      setActiveFolderId(group.id);
                     }
-                  }
-                  return;
-                }
-                if (dragOverGroupId !== group.id) setDragOverGroupId(group.id);
-              }}
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (isFolderDragEvent(e)) {
+                      e.dataTransfer.dropEffect = 'move';
+                      if (
+                        group.id !== '__ungrouped__' &&
+                        draggedFolderId !== group.id
+                      ) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const nextPos: 'before' | 'after' =
+                          e.clientX < rect.left + rect.width / 2
+                            ? 'before'
+                            : 'after';
+                        if (
+                          folderDropTarget?.groupId !== group.id ||
+                          folderDropTarget.position !== nextPos
+                        ) {
+                          setFolderDropTarget({
+                            groupId: group.id,
+                            position: nextPos,
+                          });
+                        }
+                      }
+                      return;
+                    }
+                    if (dragOverGroupId !== group.id)
+                      setDragOverGroupId(group.id);
+                  }}
               onDragLeave={(e) => {
                 if (!e.currentTarget.contains(e.relatedTarget as Node)) {
                   if (dragOverGroupId === group.id) setDragOverGroupId(null);
@@ -1575,7 +2350,7 @@ export function KanbanBoard({
                 }
               }}
               onDrop={(e) => handleDropOnGroup(e, group.id)}
-              className={`relative w-[calc(100vw-4.5rem)] max-w-[260px] sm:w-[240px] md:w-[256px] shrink-0 flex flex-col max-h-full rounded-lg border bg-[var(--tf-surface)] overflow-hidden transition-all ${
+              className={`relative w-[calc(100vw-3.5rem)] max-w-[288px] sm:w-[264px] md:w-[276px] lg:w-[288px] shrink-0 flex flex-col max-h-full rounded-lg border bg-[var(--tf-surface)] overflow-hidden transition-all ${
                 isDraggingThisGroup
                   ? 'opacity-50 scale-[0.98] border-dashed border-[var(--tf-accent)]'
                   : isGroupReorderTarget
@@ -1674,7 +2449,10 @@ export function KanbanBoard({
                   </button>
 
                   {openColorPickerId === group.id && (
-                    <div className="absolute right-0 top-8 z-30 p-2 rounded-md border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-xl grid grid-cols-5 gap-1.5 w-max">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute right-0 top-8 z-30 p-3 rounded-xl border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] shadow-2xl grid grid-cols-6 gap-2.5 w-max"
+                    >
                       {COLOR_KEYS.map((cKey) => (
                         <button
                           key={cKey}
@@ -1686,15 +2464,30 @@ export function KanbanBoard({
                             updateFolder(group.id, { color: cKey });
                             setOpenColorPickerId(null);
                           }}
-                          className={`w-4 h-4 rounded-full ${groupStyles[cKey].dot} hover:scale-110 transition-transform ${
+                          className={`w-5 h-5 rounded-full ${groupStyles[cKey].dot} border border-black/20 dark:border-white/25 shadow-xs hover:scale-125 transition-transform ${
                             colorKey === cKey
-                              ? 'ring-2 ring-[var(--tf-text)] ring-offset-1 ring-offset-[var(--tf-elevated)]'
-                              : 'opacity-85 hover:opacity-100'
+                              ? 'ring-2 ring-[var(--tf-text)] ring-offset-2 ring-offset-[var(--tf-elevated)] scale-110'
+                              : 'opacity-95 hover:opacity-100'
                           }`}
                         />
                       ))}
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setOpenColorPickerId(null);
+                      setOpenActionsMenuId(null);
+                      onOpenAddModal(LinkStatus.UNREAD, group.id);
+                    }}
+                    title={t.board.addLinkToGroupTitle(group.name)}
+                    aria-label={t.board.addLinkToGroupAria(group.name)}
+                    className="p-1 text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)] rounded transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
 
                   <button
                     type="button"
@@ -1796,7 +2589,10 @@ export function KanbanBoard({
                     }}
                   />
                 ) : (
-                  <>
+                  <SortableContext
+                    items={groupLinks.map((l) => l.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
                     {(() => {
                       const { items } = clusterGroupLinksBySource(groupLinks);
                       return (
@@ -1807,7 +2603,9 @@ export function KanbanBoard({
                                 key={entry.subGroup.key}
                                 subGroup={entry.subGroup}
                                 groupId={group.id}
+                                cardDensity={cardDensity}
                                 draggedLinkId={draggedLinkId}
+                                highlightedLinkId={highlightedLinkId}
                                 linkDropTarget={linkDropTarget}
                                 onUpdateLinkMeta={updateLink}
                                 onDelete={deleteLink}
@@ -1821,7 +2619,11 @@ export function KanbanBoard({
                                 key={entry.link.id}
                                 link={entry.link}
                                 groupId={group.id}
+                                cardDensity={cardDensity}
                                 isDragging={draggedLinkId === entry.link.id}
+                                isHighlighted={
+                                  highlightedLinkId === entry.link.id
+                                }
                                 dropPosition={
                                   linkDropTarget?.groupId === group.id &&
                                   linkDropTarget?.linkId === entry.link.id &&
@@ -1849,16 +2651,17 @@ export function KanbanBoard({
                           {t.board.dropToAdd(group.name)}
                         </div>
                       )}
-                  </>
+                  </SortableContext>
                 )}
               </div>
-            </section>
+            </FolderDroppableWrapper>
           );
         })}
 
         {/* Dedicated "Drop to Create New Tab Group" Zone at the end of the Board */}
         {!isLoading && visibleGroups.length > 0 && (
           <section
+            ref={setNewGroupDropNodeRef}
             id="tab-group-drop-new"
             data-testid="drop-new-tab-group-zone"
             aria-label={t.board.dropNewGroupTitle}
@@ -1877,14 +2680,18 @@ export function KanbanBoard({
             }}
             onDrop={handleDropToCreateNewGroup}
             className={`w-[240px] sm:w-[250px] md:w-[270px] shrink-0 rounded-lg border border-dashed p-4 flex flex-col items-center justify-center text-center gap-2.5 transition-all select-none ${
-              dragOverGroupId === '__new_group_drop__'
+              dragOverGroupId === '__new_group_drop__' ||
+              isDndOverNewGroup ||
+              dndIsOverNewGroupZone
                 ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] ring-1 ring-[var(--tf-accent)] min-h-[210px]'
                 : 'border-[var(--tf-border)] bg-[var(--tf-surface)]/45 hover:border-[var(--tf-border-strong)] hover:bg-[var(--tf-surface)]/80 min-h-[180px]'
             }`}
           >
             <div
               className={`w-9 h-9 rounded-lg border flex items-center justify-center transition-colors ${
-                dragOverGroupId === '__new_group_drop__'
+                dragOverGroupId === '__new_group_drop__' ||
+                isDndOverNewGroup ||
+                dndIsOverNewGroupZone
                   ? 'border-[var(--tf-accent)] bg-[var(--tf-elevated)] text-[var(--tf-accent)]'
                   : 'border-[var(--tf-border)] bg-[var(--tf-elevated)] text-[var(--tf-text-secondary)]'
               }`}
@@ -1894,11 +2701,13 @@ export function KanbanBoard({
 
             <div className="space-y-1">
               <h3 className="text-xs font-semibold text-[var(--tf-text)]">
-                { isImportingGroup
+                {isImportingGroup
                   ? t.board.creatingGroupStatus
-                  : dragOverGroupId === '__new_group_drop__'
+                  : dragOverGroupId === '__new_group_drop__' ||
+                    isDndOverNewGroup ||
+                    dndIsOverNewGroupZone
                   ? t.board.dropNewGroupActive
-                  : t.board.dropNewGroupTitle }
+                  : t.board.dropNewGroupTitle}
               </h3>
               <p className="text-[11px] text-[var(--tf-text-muted)] leading-relaxed">
                 {t.board.dropNewGroupSubtext}
@@ -1943,12 +2752,16 @@ export function KanbanBoard({
               const count = links.filter((l) => l.folder_id === group.id).length;
               const isSelected =
                 activeFolderId === group.id || focusedGroupId === group.id;
-              const isDropTarget = dragOverGroupId === group.id;
+              const isNativeDropTarget = dragOverGroupId === group.id;
 
               return (
-                <button
+                <BottomNavFolderButton
                   key={group.id}
-                  type="button"
+                  group={group}
+                  style={style}
+                  count={count}
+                  isSelected={isSelected}
+                  isNativeDropTarget={isNativeDropTarget}
                   onClick={() => {
                     if (group.collapsed) {
                       updateFolder(group.id, { collapsed: false });
@@ -1969,24 +2782,7 @@ export function KanbanBoard({
                     }
                   }}
                   onDrop={(e) => handleDropOnGroup(e, group.id)}
-                  className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md text-[11px] font-medium transition-all whitespace-nowrap shrink-0 border ${
-                    isDropTarget
-                      ? 'border-[var(--tf-accent)] bg-[var(--tf-accent-soft)] text-[var(--tf-text)] scale-[1.02]'
-                      : isSelected
-                      ? `${style.badgeBg} ${style.badgeText}`
-                      : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-surface)]'
-                  }`}
-                >
-                  <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${style.dot}`}
-                  />
-                  <span className="max-w-[110px] sm:max-w-[140px] truncate">
-                    {group.name}
-                  </span>
-                  <span className="font-mono text-[10px] tabular-nums opacity-75">
-                    {count}
-                  </span>
-                </button>
+                />
               );
             })}
 
