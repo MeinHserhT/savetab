@@ -9,6 +9,7 @@ import {
   findExistingGroupForLinkSource,
   moveAndReorderGroupLinks,
   normalizeLinkSourceDomain,
+  normalizeLinkUrlKey,
   resolveYouTubeChannelFromLink,
 } from '@/lib/kanban-rules';
 import {
@@ -56,6 +57,8 @@ interface CreateLinkPayload {
   title?: string;
   description?: string;
   image_url?: string | null;
+  target_link_id?: string | null;
+  position?: 'before' | 'after';
 }
 
 function getUserHeaders(includeJsonContentType = false): Record<string, string> {
@@ -71,6 +74,7 @@ function getUserHeaders(includeJsonContentType = false): Record<string, string> 
 
 let activeFirestoreUnsubscribe: (() => void) | null = null;
 const manuallyMovedLinkIds = new Set<string>();
+const inFlightAddByUrlKey = new Map<string, Promise<LinkItem | null>>();
 
 const VIDEO_META_STORAGE_KEY = 'tabflow_video_meta_v1';
 
@@ -393,22 +397,12 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         manuallyMovedLinkIds
       );
 
-      set((state) => ({
+      set({
         userId: data.user?.id ?? uid,
         links: consolidated.links,
         folders: loadedFolders,
         isLoading: false,
-        workspaceNotice:
-          consolidated.removedDuplicateLinks.length > 0 && !state.workspaceNotice
-            ? {
-                id: `notice-${Date.now()}`,
-                kind: 'old-duplicates-cleaned',
-                sourceLabel: '',
-                groupName: '',
-                removedCount: consolidated.removedDuplicateLinks.length,
-              }
-            : state.workspaceNotice,
-      }));
+      });
 
       if (
         consolidated.movedLinks.length > 0 ||
@@ -476,22 +470,11 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
               cloudFolders,
               manuallyMovedLinkIds
             );
-            set((state) => ({
+            set({
               folders: cloudFolders,
               links: consolidated.links,
               isCloudSynced: true,
-              workspaceNotice:
-                consolidated.removedDuplicateLinks.length > 0 &&
-                !state.workspaceNotice
-                  ? {
-                      id: `notice-${Date.now()}`,
-                      kind: 'old-duplicates-cleaned',
-                      sourceLabel: '',
-                      groupName: '',
-                      removedCount: consolidated.removedDuplicateLinks.length,
-                    }
-                  : state.workspaceNotice,
-            }));
+            });
             if (
               consolidated.movedLinks.length > 0 ||
               consolidated.removedDuplicateLinks.length > 0 ||
@@ -507,22 +490,11 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
               get().folders,
               manuallyMovedLinkIds
             );
-            set((state) => ({
+            set({
               links: consolidated.links,
               isCloudSynced: true,
               isLoading: false,
-              workspaceNotice:
-                consolidated.removedDuplicateLinks.length > 0 &&
-                !state.workspaceNotice
-                  ? {
-                      id: `notice-${Date.now()}`,
-                      kind: 'old-duplicates-cleaned',
-                      sourceLabel: '',
-                      groupName: '',
-                      removedCount: consolidated.removedDuplicateLinks.length,
-                    }
-                  : state.workspaceNotice,
-            }));
+            });
             if (
               consolidated.movedLinks.length > 0 ||
               consolidated.removedDuplicateLinks.length > 0 ||
@@ -550,67 +522,69 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   clearHighlightedLinkId: () => set({ highlightedLinkId: null }),
 
   addLink: async (payload) => {
-    set({ isScraping: true, errorMessage: null });
-    const previousLinks = get().links;
-    const previousFolders = get().folders;
-    const preExistingDuplicate = findDuplicateLinkByUrl(
-      payload.url,
-      previousLinks,
-      previousFolders
-    );
-
-    // Immediately show the duplicate alert banner/toast if we already know this URL exists in the workspace
-    if (preExistingDuplicate) {
-      const immediateConsolidated = consolidateLinksAcrossGroups(
-        previousLinks,
-        previousFolders,
-        manuallyMovedLinkIds
-      );
-      const immediateKept =
-        immediateConsolidated.links.find(
-          (item) => item.id === preExistingDuplicate.id
-        ) ?? preExistingDuplicate;
-      const immediateGroupName =
-        previousFolders.find((f) => f.id === immediateKept.folder_id)?.name ||
-        'Tab đã lưu';
-      const immediateSourceLabel =
-        immediateKept.title ||
-        resolveYouTubeChannelFromLink(immediateKept) ||
-        normalizeLinkSourceDomain(immediateKept);
-
-      set({
-        links: immediateConsolidated.links,
-        isScraping: false,
-        highlightedLinkId: immediateKept.id,
-        workspaceNotice: {
-          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          kind: 'duplicate-removed',
-          sourceLabel: immediateSourceLabel,
-          groupName: immediateGroupName,
-          folderId: immediateKept.folder_id,
-        },
-      });
-
-      if (
-        immediateConsolidated.movedLinks.length > 0 ||
-        immediateConsolidated.removedDuplicateLinks.length > 0 ||
-        immediateConsolidated.updatedKeptLinks.length > 0
-      ) {
-        void persistConsolidatedState(immediateConsolidated, get().authUser);
-      }
-
-      const lowerTitle = (immediateKept.title || '').trim().toLowerCase();
-      const needsMetadataEnrichment =
-        !lowerTitle ||
-        lowerTitle === 'youtube' ||
-        lowerTitle === '- youtube' ||
-        lowerTitle === 'watch - youtube' ||
-        lowerTitle.startsWith('youtube clip (');
-
-      if (!needsMetadataEnrichment) {
-        return immediateKept;
+    const urlKey =
+      normalizeLinkUrlKey(payload.url) || payload.url.trim().toLowerCase();
+    if (urlKey) {
+      const existingInFlight = inFlightAddByUrlKey.get(urlKey);
+      if (existingInFlight) {
+        return existingInFlight;
       }
     }
+
+    const runAddLink = async (): Promise<LinkItem | null> => {
+      set({
+        isScraping: true,
+        errorMessage: null,
+        workspaceNotice: null,
+        highlightedLinkId: null,
+      });
+      const previousLinks = get().links;
+      const previousFolders = get().folders;
+      const preExistingDuplicate = findDuplicateLinkByUrl(
+        payload.url,
+        previousLinks,
+        previousFolders
+      );
+
+      if (preExistingDuplicate) {
+        const immediateConsolidated = consolidateLinksAcrossGroups(
+          previousLinks,
+          previousFolders,
+          manuallyMovedLinkIds
+        );
+        const immediateKept =
+          immediateConsolidated.links.find(
+            (item) => item.id === preExistingDuplicate.id
+          ) ?? preExistingDuplicate;
+
+        set({
+          links: immediateConsolidated.links,
+          isScraping: false,
+          highlightedLinkId: immediateKept.id,
+          activeFolderId: immediateKept.folder_id ?? get().activeFolderId,
+          workspaceNotice: null,
+        });
+
+        if (
+          immediateConsolidated.movedLinks.length > 0 ||
+          immediateConsolidated.removedDuplicateLinks.length > 0 ||
+          immediateConsolidated.updatedKeptLinks.length > 0
+        ) {
+          void persistConsolidatedState(immediateConsolidated, get().authUser);
+        }
+
+        const lowerTitle = (immediateKept.title || '').trim().toLowerCase();
+        const needsMetadataEnrichment =
+          !lowerTitle ||
+          lowerTitle === 'youtube' ||
+          lowerTitle === '- youtube' ||
+          lowerTitle === 'watch - youtube' ||
+          lowerTitle.startsWith('youtube clip (');
+
+        if (!needsMetadataEnrichment) {
+          return immediateKept;
+        }
+      }
 
     try {
       const normalizedPayloadFolderId =
@@ -734,19 +708,16 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       const effectiveFolders =
         currentFolders.length > 0 ? currentFolders : serverFolders;
 
+      // Only detect a duplicate if the link actually exists in `previousLinks` (the user's active board)
       const matchedDuplicate =
         preExistingDuplicate ??
         findDuplicateLinkByUrl(
           createdLink.url,
           previousLinks,
           effectiveFolders
-        ) ??
-        (data.duplicateOfLinkId
-          ? previousLinks.find((item) => item.id === data.duplicateOfLinkId) ??
-            createdLink
-          : null);
+        );
 
-      // Case 1: The user added a tab with the exact same URL as an existing tab
+      // Case 1: The user added a tab with the exact same URL as an existing tab in their current board
       if (matchedDuplicate) {
         const wasTransientCreatedId = createdLink.id !== matchedDuplicate.id;
         if (wasTransientCreatedId) {
@@ -782,14 +753,6 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
           consolidated.links.find((item) => item.id === createdLink.id) ??
           matchedDuplicate;
 
-        const groupName =
-          effectiveFolders.find((f) => f.id === keptLink.folder_id)?.name ||
-          'Tab đã lưu';
-        const sourceLabel =
-          keptLink.title ||
-          resolveYouTubeChannelFromLink(keptLink) ||
-          normalizeLinkSourceDomain(keptLink);
-
         set({
           folders:
             !get().isCloudSynced && serverFolders.length > 0
@@ -801,13 +764,8 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
           isScraping: false,
           errorMessage: null,
           highlightedLinkId: keptLink.id,
-          workspaceNotice: {
-            id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            kind: 'duplicate-removed',
-            sourceLabel,
-            groupName,
-            folderId: keptLink.folder_id,
-          },
+          activeFolderId: keptLink.folder_id ?? get().activeFolderId,
+          workspaceNotice: null,
         });
 
         const consolidatedForPersist: ConsolidateLinksResult =
@@ -825,7 +783,7 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         return keptLink;
       }
 
-      // Case 2: Check if an existing group already has a tab from the same YouTube channel or website domain
+      // Case 2: Brand-new link in the user's workspace
       const matchedExistingFolderId = findExistingGroupForLinkSource(
         createdLink,
         previousLinks,
@@ -880,19 +838,28 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         ? effectiveFolders
         : [...effectiveFolders, targetFolderObj];
 
-      const candidateLinks =
-        Array.isArray(data.links) && !get().isCloudSynced
-          ? (data.links as LinkItem[]).map((item) =>
-              item.id === finalCreatedLink.id ? finalCreatedLink : item
-            )
-          : [
-              finalCreatedLink,
-              ...get().links.filter((item) => item.id !== finalCreatedLink.id),
-            ];
+      if (payload.target_link_id) {
+        manuallyMovedLinkIds.add(finalCreatedLink.id);
+      }
+
+      const rawCandidateLinks = [
+        ...previousLinks.filter((item) => item.id !== finalCreatedLink.id),
+        finalCreatedLink,
+      ];
+
+      const positionedCandidateLinks = moveAndReorderGroupLinks(
+        rawCandidateLinks,
+        {
+          linkId: finalCreatedLink.id,
+          targetFolderId: fallbackFolderId,
+          targetLinkId: payload.target_link_id ?? null,
+          position: payload.position ?? 'after',
+        }
+      );
 
       const mergedLinks = mergeCachedVideoDuration(
-        candidateLinks,
-        get().links
+        positionedCandidateLinks,
+        previousLinks
       );
       const consolidated = consolidateLinksAcrossGroups(
         mergedLinks,
@@ -900,23 +867,15 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         manuallyMovedLinkIds
       );
 
-      let nextNotice = get().workspaceNotice;
-      if (consolidated.removedDuplicateLinks.length > 0) {
-        const targetGroupName =
-          nextFolders.find((f) => f.id === fallbackFolderId)?.name ||
-          'Tab đã lưu';
-        nextNotice = {
-          id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          kind: 'duplicate-removed',
-          sourceLabel:
-            finalCreatedLink.title ||
-            normalizeLinkSourceDomain(finalCreatedLink),
-          groupName: targetGroupName,
-          folderId: fallbackFolderId,
-        };
-      } else if (
+      const placedLink =
+        consolidated.links.find((item) => item.id === finalCreatedLink.id) ??
+        finalCreatedLink;
+
+      let nextNotice: WorkspaceNotice | null = null;
+      if (
         matchedExistingFolderId &&
-        nextNotice?.kind !== 'duplicate-removed'
+        normalizedPayloadFolderId &&
+        matchedExistingFolderId !== normalizedPayloadFolderId
       ) {
         const targetGroupName =
           nextFolders.find((f) => f.id === matchedExistingFolderId)
@@ -939,6 +898,8 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         isScraping: false,
         errorMessage: null,
         workspaceNotice: nextNotice,
+        highlightedLinkId: placedLink.id,
+        activeFolderId: placedLink.folder_id ?? fallbackFolderId,
       });
 
       if (authUser && canSyncWithFirestore(authUser)) {
@@ -946,8 +907,8 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
           try {
             await createLinkInFirestore(
               authUser.uid,
-              finalCreatedLink,
-              fallbackFolderId,
+              placedLink,
+              placedLink.folder_id ?? fallbackFolderId,
               targetFolderObj
             );
           } catch (cloudErr) {
@@ -964,10 +925,7 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         void persistConsolidatedState(consolidated, authUser);
       }
 
-      return (
-        consolidated.links.find((item) => item.id === finalCreatedLink.id) ??
-        finalCreatedLink
-      );
+      return placedLink;
     } catch (error) {
       set({
         isScraping: false,
@@ -976,6 +934,18 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       });
       return null;
     }
+    };
+
+    const taskPromise = runAddLink().finally(() => {
+      if (urlKey) {
+        inFlightAddByUrlKey.delete(urlKey);
+      }
+    });
+
+    if (urlKey) {
+      inFlightAddByUrlKey.set(urlKey, taskPromise);
+    }
+    return taskPromise;
   },
 
   updateLink: async (id, patch) => {
@@ -1052,52 +1022,7 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
       effectivePatch.order_index = updatedItemAfterConsolidation.order_index;
     }
 
-    let nextNotice = get().workspaceNotice;
-    if (consolidated.removedDuplicateLinks.length > 0) {
-      const firstDup = consolidated.removedDuplicateLinks[0];
-      const keptMatch = findDuplicateLinkByUrl(
-        firstDup.url,
-        nextLinks,
-        currentFolders
-      );
-      const targetGroupName =
-        currentFolders.find((f) => f.id === keptMatch?.folder_id)?.name ||
-        'Tab đã lưu';
-      const sourceLabel =
-        keptMatch?.title ||
-        firstDup.title ||
-        normalizeLinkSourceDomain(firstDup);
-      nextNotice = {
-        id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        kind: 'duplicate-removed',
-        sourceLabel,
-        groupName: targetGroupName,
-        folderId: keptMatch?.folder_id ?? null,
-      };
-    } else if (
-      updatedItemAfterConsolidation &&
-      updatedItemAfterConsolidation.folder_id &&
-      updatedItemAfterConsolidation.folder_id !== targetLink.folder_id &&
-      patch.folder_id === undefined &&
-      nextNotice?.kind !== 'duplicate-removed'
-    ) {
-      const targetGroupName =
-        currentFolders.find(
-          (f) => f.id === updatedItemAfterConsolidation.folder_id
-        )?.name || 'Tab đã lưu';
-      const sourceLabel =
-        resolveYouTubeChannelFromLink(updatedItemAfterConsolidation) ||
-        normalizeLinkSourceDomain(updatedItemAfterConsolidation);
-      nextNotice = {
-        id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        kind: 'same-website-grouped',
-        sourceLabel,
-        groupName: targetGroupName,
-        folderId: updatedItemAfterConsolidation.folder_id,
-      };
-    }
-
-    set({ links: nextLinks, workspaceNotice: nextNotice });
+    set({ links: nextLinks });
 
     if (
       consolidated.movedLinks.length > 0 ||

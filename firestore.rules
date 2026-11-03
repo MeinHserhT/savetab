@@ -113,12 +113,17 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isUserScopedFolderOwnedByCaller(userId, folderId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/folders/$(folderId)) &&
+        get(/databases/$(database)/documents/users/$(userId)/folders/$(folderId)).data.user_id == request.auth.uid;
+    }
+
     function isParentFolderOwnedByCaller(folderId) {
       return exists(/databases/$(database)/documents/folders/$(folderId)) &&
         get(/databases/$(database)/documents/folders/$(folderId)).data.user_id == request.auth.uid;
     }
 
-    // 4. Collection Rules: /users/{userId}
+    // 4. Primary User Namespace & Subcollections: /users/{userId}
     match /users/{userId} {
       allow get: if isSignedIn() &&
         isValidId(userId) &&
@@ -145,9 +150,114 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']);
 
       allow delete: if false;
+
+      // 4A. User-Scoped Tab Groups Subcollection: /users/{userId}/folders/{folderId}
+      match /folders/{folderId} {
+        allow get: if isSignedIn() &&
+          isValidId(userId) &&
+          isValidId(folderId) &&
+          request.auth.uid == userId &&
+          (resource == null || existing().user_id == request.auth.uid);
+
+        allow list: if isSignedIn() &&
+          request.auth.uid == userId &&
+          existing().user_id == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(folderId) &&
+          request.auth.uid == userId &&
+          isValidFolder(incoming()) &&
+          incoming().id == folderId &&
+          incoming().user_id == userId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(folderId) &&
+          request.auth.uid == userId &&
+          isValidFolder(incoming()) &&
+          existing().user_id == request.auth.uid &&
+          incoming().id == existing().id &&
+          incoming().user_id == existing().user_id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time && (
+            // Action 1: Rename tab group
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) ||
+            // Action 2: Change tab group color
+            incoming().diff(existing()).affectedKeys().hasOnly(['color', 'updatedAt']) ||
+            // Action 3: Toggle collapsed state
+            incoming().diff(existing()).affectedKeys().hasOnly(['collapsed', 'updatedAt']) ||
+            // Action 4: Reorder tab group
+            incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
+            // Action 5: Multi-field metadata update
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color', 'collapsed', 'order_index', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(folderId) &&
+          request.auth.uid == userId &&
+          (resource == null || existing().user_id == request.auth.uid);
+      }
+
+      // 4B. User-Scoped Saved Links Subcollection: /users/{userId}/links/{linkId}
+      match /links/{linkId} {
+        allow get: if isSignedIn() &&
+          isValidId(userId) &&
+          isValidId(linkId) &&
+          request.auth.uid == userId &&
+          (resource == null || existing().user_id == request.auth.uid);
+
+        allow list: if isSignedIn() &&
+          request.auth.uid == userId &&
+          existing().user_id == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(linkId) &&
+          request.auth.uid == userId &&
+          isValidLinkItem(incoming()) &&
+          incoming().id == linkId &&
+          incoming().user_id == userId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isUserScopedFolderOwnedByCaller(userId, incoming().folder_id);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(linkId) &&
+          request.auth.uid == userId &&
+          isValidLinkItem(incoming()) &&
+          existing().user_id == request.auth.uid &&
+          incoming().id == existing().id &&
+          incoming().user_id == existing().user_id &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          isUserScopedFolderOwnedByCaller(userId, incoming().folder_id) && (
+            // Action 1: Edit title or description
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']) ||
+            // Action 2: Move link across groups or reorder
+            incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'status', 'order_index', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'order_index', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'order_index', 'updatedAt']) ||
+            incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
+            // Action 3: Combined metadata and group consolidation update
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'folder_id', 'status', 'order_index', 'updatedAt'])
+          );
+
+        allow delete: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(linkId) &&
+          request.auth.uid == userId &&
+          (resource == null || existing().user_id == request.auth.uid);
+      }
     }
 
-    // 5. Collection Rules: /folders/{folderId}
+    // 5. Legacy Root Collection Rules (Retained for Seamless Auto-Migration): /folders/{folderId}
     match /folders/{folderId} {
       allow get: if isSignedIn() &&
         isValidId(folderId) &&
@@ -171,15 +281,10 @@ service cloud.firestore {
         incoming().user_id == existing().user_id &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
-          // Action 1: Rename tab group
           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) ||
-          // Action 2: Change tab group color
           incoming().diff(existing()).affectedKeys().hasOnly(['color', 'updatedAt']) ||
-          // Action 3: Toggle collapsed state
           incoming().diff(existing()).affectedKeys().hasOnly(['collapsed', 'updatedAt']) ||
-          // Action 4: Reorder tab group
           incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
-          // Action 5: Multi-field metadata update
           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'color', 'collapsed', 'order_index', 'updatedAt'])
         );
 
@@ -188,7 +293,7 @@ service cloud.firestore {
         (resource == null || existing().user_id == request.auth.uid);
     }
 
-    // 6. Collection Rules: /links/{linkId}
+    // 6. Legacy Root Collection Rules (Retained for Seamless Auto-Migration): /links/{linkId}
     match /links/{linkId} {
       allow get: if isSignedIn() &&
         isValidId(linkId) &&
@@ -214,16 +319,13 @@ service cloud.firestore {
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
         isParentFolderOwnedByCaller(incoming().folder_id) && (
-          // Action 1: Edit title or description
           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'updatedAt']) ||
-          // Action 2: Move link across groups or reorder
           incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'status', 'order_index', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'order_index', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['folder_id', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'order_index', 'updatedAt']) ||
           incoming().diff(existing()).affectedKeys().hasOnly(['order_index', 'updatedAt']) ||
-          // Action 3: Combined metadata and group consolidation update
           incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'folder_id', 'status', 'order_index', 'updatedAt'])
         );
 

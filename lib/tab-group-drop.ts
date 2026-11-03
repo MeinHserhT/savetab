@@ -1,4 +1,5 @@
 import { TAB_GROUP_COLORS, TabGroupColor } from './types';
+import { normalizeLinkUrlKey } from './kanban-rules';
 
 export interface ParsedTabItem {
   url: string;
@@ -10,6 +11,21 @@ export interface ParsedTabGroupDrop {
   color?: TabGroupColor;
   tabs: ParsedTabItem[];
   isGroupPayload: boolean;
+}
+
+function deduplicateParsedTabs(items: ParsedTabItem[]): ParsedTabItem[] {
+  const byKey = new Map<string, ParsedTabItem>();
+  for (const item of items) {
+    const key = normalizeLinkUrlKey(item.url) || item.url.trim().toLowerCase();
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, item);
+    } else if (!existing.title && item.title) {
+      byKey.set(key, { ...existing, title: item.title });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 const CHROME_COLOR_MAP: Record<string, TabGroupColor> = {
@@ -150,9 +166,10 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
           });
         }
       }
-      if (tabs.length > 0) {
+      const uniqueTabs = deduplicateParsedTabs(tabs);
+      if (uniqueTabs.length > 0) {
         return {
-          tabs,
+          tabs: uniqueTabs,
           isGroupPayload: true,
         };
       }
@@ -189,6 +206,8 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
         }
       }
 
+      const uniqueTabs = deduplicateParsedTabs(tabs);
+
       const groupName =
         typeof parsed.name === 'string' && parsed.name.trim()
           ? parsed.name.trim()
@@ -202,11 +221,11 @@ function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
         typeof parsed.color === 'string' ? parsed.color : undefined
       );
 
-      if (tabs.length > 0 || groupName) {
+      if (uniqueTabs.length > 0 || groupName) {
         return {
           groupName,
           color,
-          tabs,
+          tabs: uniqueTabs,
           isGroupPayload: true,
         };
       }
@@ -255,7 +274,7 @@ function parseHtmlBookmarkOrAnchors(html: string): {
   return {
     groupName: groupName || undefined,
     color,
-    tabs,
+    tabs: deduplicateParsedTabs(tabs),
     hasFolderHeading: Boolean(groupName),
   };
 }
@@ -318,7 +337,7 @@ function extractUrlsFromText(text: string): ParsedTabItem[] {
     }
   }
 
-  return tabs;
+  return deduplicateParsedTabs(tabs);
 }
 
 export function parseTabGroupFromTextOrHtml(
@@ -347,21 +366,13 @@ export function parseTabGroupFromTextOrHtml(
   // 3. Check HTML payload (Chrome Bookmark folder drag, multi-anchor selection, or extension drag card)
   const htmlResult = rawHtml ? parseHtmlBookmarkOrAnchors(rawHtml) : null;
 
-  // 4. Extract URLs from uri-list and plain text
+  // 4. Extract URLs from uri-list and plain text (deduplicated across MIME types)
   const textTabs = extractUrlsFromText(
     [uriList || '', rawText || '', directUrl || ''].filter(Boolean).join('\n')
   );
 
   if (htmlResult && htmlResult.tabs.length > 0) {
-    // Merge any additional URLs from textTabs while keeping HTML titles
-    const merged: ParsedTabItem[] = [...htmlResult.tabs];
-    const seen = new Set(merged.map((t) => t.url));
-    for (const item of textTabs) {
-      if (!seen.has(item.url)) {
-        seen.add(item.url);
-        merged.push(item);
-      }
-    }
+    const merged = deduplicateParsedTabs([...htmlResult.tabs, ...textTabs]);
     return {
       groupName: htmlResult.groupName,
       color: htmlResult.color,

@@ -242,6 +242,227 @@ const knownCloudFolderIds = new Set<string>();
 const knownCloudLinkIds = new Set<string>();
 let hasLoadedCloudFolders = false;
 let hasLoadedCloudLinks = false;
+const migratedUserIds = new Set<string>();
+
+function resolveCurrentSafeUid(explicitUid?: string): string | null {
+  const raw = explicitUid || auth.currentUser?.uid;
+  if (!raw) return null;
+  return sanitizeId(raw, 'usr');
+}
+
+/**
+ * Automatically migrates any folders and links owned by `safeUid` from legacy
+ * top-level `/folders` and `/links` collections into `/users/{safeUid}/folders`
+ * and `/users/{safeUid}/links`, then cleans up the legacy root documents.
+ */
+export async function migrateLegacyRootWorkspaceIfNeeded(
+  uid: string
+): Promise<void> {
+  if (!canSyncWithFirestore(auth.currentUser)) return;
+  const safeUid = sanitizeId(uid, 'usr');
+  if (migratedUserIds.has(safeUid)) return;
+  migratedUserIds.add(safeUid);
+
+  try {
+    const legacyFoldersSnap = await getDocs(
+      query(collection(db, 'folders'), where('user_id', '==', safeUid))
+    );
+    const legacyLinksSnap = await getDocs(
+      query(collection(db, 'links'), where('user_id', '==', safeUid))
+    );
+
+    if (legacyFoldersSnap.empty && legacyLinksSnap.empty) {
+      return;
+    }
+
+    const validSubFolderIds = new Set<string>();
+
+    // 1. Migrate legacy folders into /users/{safeUid}/folders/{folderId}
+    for (let i = 0; i < legacyFoldersSnap.docs.length; i++) {
+      const docSnap = legacyFoldersSnap.docs[i];
+      const d = docSnap.data();
+      const folderObj: Folder = {
+        id: String(d.id || docSnap.id),
+        user_id: safeUid,
+        name: String(d.name || 'Tab đã lưu'),
+        parent_id: null,
+        order_index: Number(d.order_index ?? i),
+        color: sanitizeColor(d.color as TabGroupColor),
+        collapsed: Boolean(d.collapsed),
+      };
+
+      if (isLegacySeedFolder(folderObj) && legacyLinksSnap.empty) {
+        await deleteDoc(doc(db, 'folders', docSnap.id)).catch(() => {});
+        continue;
+      }
+
+      const folderId = sanitizeId(folderObj.id, 'fld');
+      const subFolderRef = doc(db, 'users', safeUid, 'folders', folderId);
+      const existingSubSnap = await getDoc(subFolderRef);
+
+      if (!existingSubSnap.exists()) {
+        await setDoc(subFolderRef, {
+          id: folderId,
+          user_id: safeUid,
+          name: sanitizeFolderName(folderObj.name),
+          color: sanitizeColor(folderObj.color),
+          collapsed: Boolean(folderObj.collapsed),
+          order_index: Math.max(
+            0,
+            Math.min(10000, Math.round(Number(folderObj.order_index) || i))
+          ),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      validSubFolderIds.add(folderId);
+      knownCloudFolderIds.add(folderId);
+    }
+
+    // 2. Ensure a fallback folder exists if legacy links exist without a migrated folder
+    let fallbackFolderId = Array.from(validSubFolderIds)[0] || '';
+    if (!legacyLinksSnap.empty && !fallbackFolderId) {
+      fallbackFolderId = sanitizeId(`fld-${safeUid.slice(0, 8)}-default`, 'fld');
+      const fallbackRef = doc(db, 'users', safeUid, 'folders', fallbackFolderId);
+      const fallbackSnap = await getDoc(fallbackRef);
+      if (!fallbackSnap.exists()) {
+        await setDoc(fallbackRef, {
+          id: fallbackFolderId,
+          user_id: safeUid,
+          name: 'Tab đã lưu',
+          color: 'blue',
+          collapsed: false,
+          order_index: 0,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      validSubFolderIds.add(fallbackFolderId);
+      knownCloudFolderIds.add(fallbackFolderId);
+    }
+
+    // 3. Migrate legacy links into /users/{safeUid}/links/{linkId}
+    for (let i = 0; i < legacyLinksSnap.docs.length; i++) {
+      const docSnap = legacyLinksSnap.docs[i];
+      const d = docSnap.data();
+
+      if (isLegacyMockLink(d)) {
+        await deleteDoc(doc(db, 'links', docSnap.id)).catch(() => {});
+        continue;
+      }
+
+      const linkId = sanitizeId(String(d.id || docSnap.id), 'lnk');
+      const candidateFolderId = d.folder_id
+        ? sanitizeId(String(d.folder_id), 'fld')
+        : fallbackFolderId;
+
+      let resolvedFolderId = candidateFolderId;
+      if (!validSubFolderIds.has(resolvedFolderId)) {
+        const checkFolderRef = doc(
+          db,
+          'users',
+          safeUid,
+          'folders',
+          resolvedFolderId
+        );
+        const checkFolderSnap = await getDoc(checkFolderRef);
+        if (!checkFolderSnap.exists()) {
+          resolvedFolderId =
+            fallbackFolderId ||
+            sanitizeId(`fld-${safeUid.slice(0, 8)}-default`, 'fld');
+          const ensureRef = doc(
+            db,
+            'users',
+            safeUid,
+            'folders',
+            resolvedFolderId
+          );
+          const ensureSnap = await getDoc(ensureRef);
+          if (!ensureSnap.exists()) {
+            await setDoc(ensureRef, {
+              id: resolvedFolderId,
+              user_id: safeUid,
+              name: 'Tab đã lưu',
+              color: 'blue',
+              collapsed: false,
+              order_index: 0,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+        validSubFolderIds.add(resolvedFolderId);
+        knownCloudFolderIds.add(resolvedFolderId);
+      }
+
+      const subLinkRef = doc(db, 'users', safeUid, 'links', linkId);
+      const existingLinkSnap = await getDoc(subLinkRef);
+      if (!existingLinkSnap.exists()) {
+        const safeUrl =
+          String(d.url || 'https://example.com')
+            .trim()
+            .slice(0, MAX_LINK_URL_LENGTH) || 'https://example.com';
+        const safeDomain =
+          String(d.domain || 'example.com')
+            .trim()
+            .slice(0, MAX_LINK_DOMAIN_LENGTH) || 'example.com';
+        const safeTitle =
+          String(d.title || safeDomain || 'Saved Tab')
+            .trim()
+            .slice(0, MAX_LINK_TITLE_LENGTH) || 'Saved Tab';
+        const safeDescription = String(d.description || '').slice(
+          0,
+          MAX_LINK_DESCRIPTION_LENGTH
+        );
+        const safeImageUrl = String(d.image_url || '')
+          .trim()
+          .slice(0, MAX_LINK_URL_LENGTH);
+        const safeFavicon =
+          String(d.favicon || '/favicon.ico')
+            .trim()
+            .slice(0, MAX_LINK_URL_LENGTH) || '/favicon.ico';
+
+        await setDoc(subLinkRef, {
+          id: linkId,
+          user_id: safeUid,
+          folder_id: resolvedFolderId,
+          url: safeUrl,
+          domain: safeDomain,
+          title: safeTitle,
+          description: safeDescription,
+          image_url: safeImageUrl,
+          favicon: safeFavicon,
+          status: sanitizeStatus(d.status as LinkStatus),
+          order_index: Math.max(
+            0,
+            Math.min(10000, Math.round(Number(d.order_index) || i))
+          ),
+          reading_minutes: Math.max(
+            1,
+            Math.min(1000, Math.round(Number(d.reading_minutes) || 5))
+          ),
+          scrape_status:
+            d.scrape_status === 'degraded' || d.scrape_status === 'manual'
+              ? d.scrape_status
+              : 'ok',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      knownCloudLinkIds.add(linkId);
+
+      // Delete legacy root link after copying to /users/{safeUid}/links/{linkId}
+      await deleteDoc(doc(db, 'links', docSnap.id)).catch(() => {});
+    }
+
+    // 4. Delete legacy root folders after links have been migrated
+    for (const docSnap of legacyFoldersSnap.docs) {
+      await deleteDoc(doc(db, 'folders', docSnap.id)).catch(() => {});
+    }
+  } catch (error) {
+    console.warn('Legacy root workspace migration warning:', error);
+  }
+}
 
 export async function ensureUserWorkspaceSeededInFirestore(
   uid: string,
@@ -250,6 +471,8 @@ export async function ensureUserWorkspaceSeededInFirestore(
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeUid = sanitizeId(uid, 'usr');
+
+  await migrateLegacyRootWorkspaceIfNeeded(safeUid);
 
   const realLinks = seedLinks.filter((l) => !isLegacyMockLink(l));
   const usedFolderIds = new Set(
@@ -263,37 +486,39 @@ export async function ensureUserWorkspaceSeededInFirestore(
     return;
   }
 
+  const userFoldersCollectionPath = `users/${safeUid}/folders`;
   try {
-    const foldersQuery = query(
-      collection(db, 'folders'),
-      where('user_id', '==', safeUid)
+    const existingFoldersSnap = await getDocs(
+      query(
+        collection(db, 'users', safeUid, 'folders'),
+        where('user_id', '==', safeUid)
+      )
     );
-    const existingFoldersSnap = await getDocs(foldersQuery);
     if (!existingFoldersSnap.empty) {
       return;
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'folders');
+    handleFirestoreError(error, OperationType.LIST, userFoldersCollectionPath);
   }
 
   const folderIdMap = new Map<string, string>();
 
   for (let i = 0; i < realFolders.length; i++) {
     const f = realFolders[i];
-    const newFolderId = sanitizeId(
-      `fld-${safeUid.slice(0, 8)}-${i}-${Date.now().toString(36)}`,
-      'fld'
-    );
+    const newFolderId = sanitizeId(f.id || `fld-${i}-${Date.now().toString(36)}`, 'fld');
     folderIdMap.set(f.id, newFolderId);
-    const folderPath = `folders/${newFolderId}`;
+    const folderPath = `users/${safeUid}/folders/${newFolderId}`;
     try {
-      await setDoc(doc(db, 'folders', newFolderId), {
+      await setDoc(doc(db, 'users', safeUid, 'folders', newFolderId), {
         id: newFolderId,
         user_id: safeUid,
         name: sanitizeFolderName(f.name),
         color: sanitizeColor(f.color),
         collapsed: Boolean(f.collapsed),
-        order_index: Math.max(0, Math.min(10000, Number(f.order_index) || i)),
+        order_index: Math.max(
+          0,
+          Math.min(10000, Math.round(Number(f.order_index) || i))
+        ),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -305,12 +530,10 @@ export async function ensureUserWorkspaceSeededInFirestore(
 
   let fallbackFolderId = Array.from(folderIdMap.values())[0];
   if (!fallbackFolderId && realLinks.length > 0) {
-    fallbackFolderId = sanitizeId(
-      `fld-${safeUid.slice(0, 8)}-0-${Date.now().toString(36)}`,
-      'fld'
-    );
+    fallbackFolderId = sanitizeId(`fld-${safeUid.slice(0, 8)}-default`, 'fld');
+    const fallbackPath = `users/${safeUid}/folders/${fallbackFolderId}`;
     try {
-      await setDoc(doc(db, 'folders', fallbackFolderId), {
+      await setDoc(doc(db, 'users', safeUid, 'folders', fallbackFolderId), {
         id: fallbackFolderId,
         user_id: safeUid,
         name: 'Tab đã lưu',
@@ -322,11 +545,7 @@ export async function ensureUserWorkspaceSeededInFirestore(
       });
       knownCloudFolderIds.add(fallbackFolderId);
     } catch (error) {
-      handleFirestoreError(
-        error,
-        OperationType.CREATE,
-        `folders/${fallbackFolderId}`
-      );
+      handleFirestoreError(error, OperationType.CREATE, fallbackPath);
     }
   }
   if (!fallbackFolderId) return;
@@ -336,13 +555,10 @@ export async function ensureUserWorkspaceSeededInFirestore(
     const mappedFolderId =
       (l.folder_id ? folderIdMap.get(l.folder_id) : undefined) ||
       fallbackFolderId;
-    const newLinkId = sanitizeId(
-      `lnk-${safeUid.slice(0, 8)}-${i}-${Date.now().toString(36)}`,
-      'lnk'
-    );
-    const linkPath = `links/${newLinkId}`;
+    const newLinkId = sanitizeId(l.id || `lnk-${i}-${Date.now().toString(36)}`, 'lnk');
+    const linkPath = `users/${safeUid}/links/${newLinkId}`;
     try {
-      await setDoc(doc(db, 'links', newLinkId), {
+      await setDoc(doc(db, 'users', safeUid, 'links', newLinkId), {
         id: newLinkId,
         user_id: safeUid,
         folder_id: mappedFolderId,
@@ -359,10 +575,13 @@ export async function ensureUserWorkspaceSeededInFirestore(
         image_url: (l.image_url || '').slice(0, MAX_LINK_URL_LENGTH),
         favicon: (l.favicon || '/favicon.ico').slice(0, MAX_LINK_URL_LENGTH),
         status: sanitizeStatus(l.status),
-        order_index: Math.max(0, Math.min(10000, Number(l.order_index) || i)),
+        order_index: Math.max(
+          0,
+          Math.min(10000, Math.round(Number(l.order_index) || i))
+        ),
         reading_minutes: Math.max(
           1,
-          Math.min(1000, Number(l.reading_minutes) || 5)
+          Math.min(1000, Math.round(Number(l.reading_minutes) || 5))
         ),
         scrape_status:
           l.scrape_status === 'degraded' || l.scrape_status === 'manual'
@@ -390,12 +609,14 @@ export function subscribeToUserWorkspace(
   hasLoadedCloudFolders = false;
   hasLoadedCloudLinks = false;
 
+  void migrateLegacyRootWorkspaceIfNeeded(safeUid);
+
   const foldersQuery = query(
-    collection(db, 'folders'),
+    collection(db, 'users', safeUid, 'folders'),
     where('user_id', '==', safeUid)
   );
   const linksQuery = query(
-    collection(db, 'links'),
+    collection(db, 'users', safeUid, 'links'),
     where('user_id', '==', safeUid)
   );
 
@@ -409,7 +630,6 @@ export function subscribeToUserWorkspace(
   const emitCleanedFolders = () => {
     if (!hasLoadedFolders) return;
     if (!hasLoadedLinks) {
-      // Wait until initial links snapshot arrives before deciding whether legacy seed folders are empty
       const nonSeedFolders = latestRawFolders
         .filter((entry) => !isLegacySeedFolder(entry.folder))
         .map((entry) => entry.folder);
@@ -431,7 +651,9 @@ export function subscribeToUserWorkspace(
         if (!deletedFolderDocIds.has(entry.docId)) {
           deletedFolderDocIds.add(entry.docId);
           knownCloudFolderIds.delete(entry.docId);
-          void deleteDoc(doc(db, 'folders', entry.docId)).catch(() => {});
+          void deleteDoc(
+            doc(db, 'users', safeUid, 'folders', entry.docId)
+          ).catch(() => {});
         }
       } else {
         activeFolders.push(entry.folder);
@@ -470,7 +692,11 @@ export function subscribeToUserWorkspace(
       emitCleanedFolders();
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'folders');
+      handleFirestoreError(
+        error,
+        OperationType.LIST,
+        `users/${safeUid}/folders`
+      );
     }
   );
 
@@ -484,7 +710,9 @@ export function subscribeToUserWorkspace(
         if (isLegacyMockLink(d)) {
           if (!deletedLinkDocIds.has(docSnap.id)) {
             deletedLinkDocIds.add(docSnap.id);
-            void deleteDoc(doc(db, 'links', docSnap.id)).catch(() => {});
+            void deleteDoc(
+              doc(db, 'users', safeUid, 'links', docSnap.id)
+            ).catch(() => {});
           }
           continue;
         }
@@ -521,7 +749,7 @@ export function subscribeToUserWorkspace(
       emitCleanedFolders();
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'links');
+      handleFirestoreError(error, OperationType.LIST, `users/${safeUid}/links`);
     }
   );
 
@@ -545,41 +773,26 @@ export async function createFolderInFirestore(
     !folder.id || folder.id === '__ungrouped__'
       ? `fld-${safeUid.slice(0, 8)}-default`
       : folder.id;
-  let folderId = sanitizeId(rawFolderId, 'fld');
+  const folderId = sanitizeId(rawFolderId, 'fld');
 
   if (knownCloudFolderIds.has(folderId)) {
     return folderId;
   }
 
+  const folderRef = doc(db, 'users', safeUid, 'folders', folderId);
   try {
-    const existingSnap = await getDoc(doc(db, 'folders', folderId));
+    const existingSnap = await getDoc(folderRef);
     if (existingSnap.exists()) {
-      const existingData = existingSnap.data();
-      if (existingData?.user_id === safeUid) {
-        knownCloudFolderIds.add(folderId);
-        return folderId;
-      }
-      // Folder ID collision with a different user/guest session — scope to current user
-      folderId = sanitizeId(
-        `fld-${safeUid.slice(0, 8)}-${folderId}`.slice(0, MAX_ID_LENGTH),
-        'fld'
-      );
-      if (knownCloudFolderIds.has(folderId)) {
-        return folderId;
-      }
-      const scopedSnap = await getDoc(doc(db, 'folders', folderId));
-      if (scopedSnap.exists() && scopedSnap.data()?.user_id === safeUid) {
-        knownCloudFolderIds.add(folderId);
-        return folderId;
-      }
+      knownCloudFolderIds.add(folderId);
+      return folderId;
     }
   } catch {
     // Proceed to create if getDoc failed or doc did not exist
   }
 
-  const path = `folders/${folderId}`;
+  const path = `users/${safeUid}/folders/${folderId}`;
   try {
-    await setDoc(doc(db, 'folders', folderId), {
+    await setDoc(folderRef, {
       id: folderId,
       user_id: safeUid,
       name: sanitizeFolderName(folder.name),
@@ -604,11 +817,13 @@ export async function updateFolderInFirestore(
   patch: Partial<Pick<Folder, 'name' | 'color' | 'collapsed' | 'order_index'>>
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
+  const safeUid = resolveCurrentSafeUid();
+  if (!safeUid) return;
   const safeId = sanitizeId(folderId, 'fld');
   if (hasLoadedCloudFolders && !knownCloudFolderIds.has(safeId)) {
     return;
   }
-  const path = `folders/${safeId}`;
+  const path = `users/${safeUid}/folders/${safeId}`;
   const updatePayload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   };
@@ -630,7 +845,10 @@ export async function updateFolderInFirestore(
   }
 
   try {
-    await updateDoc(doc(db, 'folders', safeId), updatePayload);
+    await updateDoc(
+      doc(db, 'users', safeUid, 'folders', safeId),
+      updatePayload
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -641,6 +859,8 @@ export async function deleteFolderInFirestore(
   userLinks: LinkItem[]
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
+  const safeUid = resolveCurrentSafeUid();
+  if (!safeUid) return;
   const safeId = sanitizeId(folderId, 'fld');
   const folderLinks = userLinks.filter((l) => l.folder_id === safeId);
 
@@ -651,9 +871,13 @@ export async function deleteFolderInFirestore(
     }
     knownCloudLinkIds.delete(safeLinkId);
     try {
-      await deleteDoc(doc(db, 'links', safeLinkId));
+      await deleteDoc(doc(db, 'users', safeUid, 'links', safeLinkId));
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `links/${safeLinkId}`);
+      handleFirestoreError(
+        error,
+        OperationType.DELETE,
+        `users/${safeUid}/links/${safeLinkId}`
+      );
     }
   }
 
@@ -662,9 +886,13 @@ export async function deleteFolderInFirestore(
   }
   knownCloudFolderIds.delete(safeId);
   try {
-    await deleteDoc(doc(db, 'folders', safeId));
+    await deleteDoc(doc(db, 'users', safeUid, 'folders', safeId));
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `folders/${safeId}`);
+    handleFirestoreError(
+      error,
+      OperationType.DELETE,
+      `users/${safeUid}/folders/${safeId}`
+    );
   }
 }
 
@@ -676,7 +904,7 @@ export async function createLinkInFirestore(
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
   const safeUid = sanitizeId(uid, 'usr');
-  let linkId = sanitizeId(link.id, 'lnk');
+  const linkId = sanitizeId(link.id, 'lnk');
   const rawTargetFolderId =
     !link.folder_id || link.folder_id === '__ungrouped__'
       ? !fallbackFolderId || fallbackFolderId === '__ungrouped__'
@@ -684,7 +912,7 @@ export async function createLinkInFirestore(
         : fallbackFolderId
       : link.folder_id;
 
-  // Guarantee the parent folder exists in Firestore and is owned by safeUid before creating the link
+  // Guarantee the parent folder exists in /users/{safeUid}/folders/{folderId} before creating the link
   const verifiedFolderId = await createFolderInFirestore(safeUid, {
     id: rawTargetFolderId,
     user_id: safeUid,
@@ -706,30 +934,25 @@ export async function createLinkInFirestore(
     return;
   }
 
+  const linkRef = doc(db, 'users', safeUid, 'links', linkId);
   try {
-    const existingLinkSnap = await getDoc(doc(db, 'links', linkId));
+    const existingLinkSnap = await getDoc(linkRef);
     if (existingLinkSnap.exists()) {
-      if (existingLinkSnap.data()?.user_id === safeUid) {
-        knownCloudLinkIds.add(linkId);
-        await updateLinkInFirestore(linkId, {
-          title: link.title,
-          description: link.description,
-          folder_id: verifiedFolderId,
-          status: link.status,
-          order_index: link.order_index,
-        });
-        return;
-      }
-      linkId = sanitizeId(
-        `lnk-${safeUid.slice(0, 8)}-${linkId}`.slice(0, MAX_ID_LENGTH),
-        'lnk'
-      );
+      knownCloudLinkIds.add(linkId);
+      await updateLinkInFirestore(linkId, {
+        title: link.title,
+        description: link.description,
+        folder_id: verifiedFolderId,
+        status: link.status,
+        order_index: link.order_index,
+      });
+      return;
     }
   } catch {
     // Proceed to create
   }
 
-  const path = `links/${linkId}`;
+  const path = `users/${safeUid}/links/${linkId}`;
   const safeUrl =
     (link.url || '').trim().slice(0, MAX_LINK_URL_LENGTH) ||
     'https://example.com';
@@ -752,7 +975,7 @@ export async function createLinkInFirestore(
     '/favicon.ico';
 
   try {
-    await setDoc(doc(db, 'links', linkId), {
+    await setDoc(linkRef, {
       id: linkId,
       user_id: safeUid,
       folder_id: verifiedFolderId,
@@ -794,11 +1017,13 @@ export async function updateLinkInFirestore(
   >
 ): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
+  const safeUid = resolveCurrentSafeUid();
+  if (!safeUid) return;
   const safeId = sanitizeId(linkId, 'lnk');
   if (hasLoadedCloudLinks && !knownCloudLinkIds.has(safeId)) {
     return;
   }
-  const path = `links/${safeId}`;
+  const path = `users/${safeUid}/links/${safeId}`;
   const updatePayload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   };
@@ -826,7 +1051,7 @@ export async function updateLinkInFirestore(
   if (patch.order_index !== undefined) {
     updatePayload.order_index = Math.max(
       0,
-      Math.min(10000, Number(patch.order_index) || 0)
+      Math.min(10000, Math.round(Number(patch.order_index) || 0))
     );
   }
 
@@ -836,7 +1061,7 @@ export async function updateLinkInFirestore(
   }
 
   try {
-    await updateDoc(doc(db, 'links', safeId), updatePayload);
+    await updateDoc(doc(db, 'users', safeUid, 'links', safeId), updatePayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -844,14 +1069,16 @@ export async function updateLinkInFirestore(
 
 export async function deleteLinkInFirestore(linkId: string): Promise<void> {
   if (!canSyncWithFirestore(auth.currentUser)) return;
+  const safeUid = resolveCurrentSafeUid();
+  if (!safeUid) return;
   const safeId = sanitizeId(linkId, 'lnk');
   if (hasLoadedCloudLinks && !knownCloudLinkIds.has(safeId)) {
     return;
   }
   knownCloudLinkIds.delete(safeId);
-  const path = `links/${safeId}`;
+  const path = `users/${safeUid}/links/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'links', safeId));
+    await deleteDoc(doc(db, 'users', safeUid, 'links', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }

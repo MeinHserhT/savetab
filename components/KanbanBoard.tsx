@@ -947,6 +947,7 @@ function TabLinkRow({
       )}
 
       <article
+        id={`tab-link-card-${link.id}`}
         ref={rowRef}
         {...attributes}
         {...listeners}
@@ -962,16 +963,22 @@ function TabLinkRow({
         onMouseEnter={updateHoverPosition}
         onMouseLeave={() => setHoverRect(null)}
         aria-label={link.title}
-        className={`group relative rounded-md border transition-all cursor-grab active:cursor-grabbing overflow-hidden ${
+        className={`group relative rounded-md border transition-all duration-300 cursor-grab active:cursor-grabbing overflow-hidden focus:outline-none ${
           effectiveIsDragging
             ? 'opacity-40 scale-[0.98] border-dashed border-[var(--tf-accent)] bg-[var(--tf-accent-soft)]'
             : isHighlighted
-            ? 'border-amber-500 ring-2 ring-amber-500/70 bg-amber-500/15 shadow-md'
+            ? 'border-[var(--tf-accent)] ring-2 ring-[var(--tf-accent)] bg-[var(--tf-accent-soft)] shadow-lg scale-[1.01] z-10'
             : effectiveDropPosition
             ? 'border-[var(--tf-accent)] bg-[var(--tf-card-hover)]'
             : 'border-[var(--tf-border)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] hover:border-[var(--tf-border-strong)]'
         }`}
       >
+        {isHighlighted && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-[var(--tf-accent)] animate-pulse"
+          />
+        )}
         <div className="p-2.5 flex flex-col gap-2 text-[11px]">
           <div className="flex items-start justify-between gap-1.5">
             <span
@@ -1313,6 +1320,7 @@ export function KanbanBoard({
     clearNewlyCreatedGroupId,
     clearError,
     clearNotice,
+    clearHighlightedLinkId,
     addLink,
     updateLink,
     reorderLink,
@@ -1392,6 +1400,47 @@ export function KanbanBoard({
     return () => window.clearTimeout(timer);
   }, [workspaceNotice?.id, workspaceNotice?.folderId, clearNotice]);
 
+  // Automatically scroll to, focus, and highlight newly added tabs at their exact board position
+  useEffect(() => {
+    if (!highlightedLinkId) return;
+    const targetLink = useLinkStore
+      .getState()
+      .links.find((l) => l.id === highlightedLinkId);
+    const targetFolderId = targetLink?.folder_id ?? '__ungrouped__';
+
+    setFocusedGroupId(targetFolderId);
+
+    const focusAndScrollTimer = window.setTimeout(() => {
+      const colEl = document.getElementById(`tab-group-col-${targetFolderId}`);
+      colEl?.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest',
+      });
+
+      const cardEl = document.getElementById(
+        `tab-link-card-${highlightedLinkId}`
+      ) as HTMLElement | null;
+      if (cardEl) {
+        cardEl.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+          inline: 'nearest',
+        });
+        cardEl.focus({ preventScroll: true });
+      }
+    }, 50);
+
+    const clearTimer = window.setTimeout(() => {
+      clearHighlightedLinkId();
+    }, 4500);
+
+    return () => {
+      window.clearTimeout(focusAndScrollTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [highlightedLinkId, clearHighlightedLinkId]);
+
   // Auto-scroll and focus + select the inline rename input whenever a new Tab Group is created via drop/import
   useEffect(() => {
     if (!newlyCreatedGroupId) return;
@@ -1449,10 +1498,12 @@ export function KanbanBoard({
     const handleGlobalPaste = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
+        (target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable ||
+            Boolean(target.closest('[role="dialog"]')))) ||
+        Boolean(document.querySelector('[role="dialog"]'))
       ) {
         return;
       }
@@ -1719,6 +1770,8 @@ export function KanbanBoard({
           folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: matchedLink.tags?.length ? matchedLink.tags : ['saved-tab'],
           status: LinkStatus.UNREAD,
+          target_link_id: targetLink.id,
+          position,
         });
       } else {
         await reorderLink(
@@ -1740,6 +1793,8 @@ export function KanbanBoard({
           folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: ['saved-tab'],
           status: LinkStatus.UNREAD,
+          target_link_id: targetLink.id,
+          position,
         });
       }
     }
@@ -1803,6 +1858,8 @@ export function KanbanBoard({
           folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: matchedLink.tags?.length ? matchedLink.tags : ['saved-tab'],
           status: LinkStatus.UNREAD,
+          target_link_id: activeTargetForLane?.linkId ?? null,
+          position: activeTargetForLane?.position ?? 'after',
         });
       } else {
         await reorderLink(
@@ -1824,6 +1881,8 @@ export function KanbanBoard({
           folder_id: resolvedTargetFolderId ?? (folders[0]?.id ?? null),
           tags: ['saved-tab'],
           status: LinkStatus.UNREAD,
+          target_link_id: activeTargetForLane?.linkId ?? null,
+          position: activeTargetForLane?.position ?? 'after',
         });
       }
     }
@@ -1959,22 +2018,13 @@ export function KanbanBoard({
     }
   };
 
-  const noticeMessage = workspaceNotice
-    ? workspaceNotice.kind === 'duplicate-removed'
-      ? t.board.duplicateWebsiteNotice(
+  const noticeMessage =
+    workspaceNotice?.kind === 'same-website-grouped'
+      ? t.board.sameWebsiteGroupedNotice(
           workspaceNotice.sourceLabel,
           workspaceNotice.groupName
         )
-      : workspaceNotice.kind === 'old-duplicates-cleaned'
-      ? t.board.removedOldDuplicatesNotice(workspaceNotice.removedCount ?? 1)
-      : t.board.sameWebsiteGroupedNotice(
-          workspaceNotice.sourceLabel,
-          workspaceNotice.groupName
-        )
-    : '';
-  const isDuplicateNotice =
-    workspaceNotice?.kind === 'duplicate-removed' ||
-    workspaceNotice?.kind === 'old-duplicates-cleaned';
+      : '';
 
   return (
     <div
@@ -1998,121 +2048,45 @@ export function KanbanBoard({
         </div>
       )}
 
-      {workspaceNotice && (
-        <>
-          <div
-            role="alert"
-            aria-live="assertive"
-            data-testid="workspace-notice-banner"
-            className={`mx-3 sm:mx-6 mt-3 sm:mt-4 px-3.5 py-2.5 rounded-lg border flex items-center justify-between gap-3 text-xs shrink-0 shadow-sm ${
-              isDuplicateNotice
-                ? mode === 'light'
-                  ? 'bg-amber-500/15 border-amber-500/60 text-amber-950'
-                  : 'bg-amber-500/20 border-amber-400/60 text-amber-200'
-                : mode === 'light'
-                ? 'bg-sky-500/15 border-sky-500/60 text-sky-950'
-                : 'bg-sky-500/20 border-sky-400/60 text-sky-200'
-            }`}
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <AlertTriangle
-                className={`w-4 h-4 shrink-0 ${
-                  isDuplicateNotice ? 'text-amber-500' : 'text-sky-500'
-                }`}
-              />
-              <span className="font-semibold leading-snug">{noticeMessage}</span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {workspaceNotice.folderId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (workspaceNotice.folderId) {
-                      handleSelectBottomTab(workspaceNotice.folderId);
-                    }
-                  }}
-                  className="px-2.5 py-1 rounded-md border border-current/40 bg-current/10 hover:bg-current/20 text-[11px] font-semibold transition-colors whitespace-nowrap"
-                >
-                  {t.board.viewGroupBtn}
-                </button>
-              )}
+      {workspaceNotice?.kind === 'same-website-grouped' && noticeMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="workspace-notice-banner"
+          className={`mx-3 sm:mx-6 mt-3 sm:mt-4 px-3.5 py-2.5 rounded-lg border flex items-center justify-between gap-3 text-xs shrink-0 shadow-sm ${
+            mode === 'light'
+              ? 'bg-sky-500/15 border-sky-500/60 text-sky-950'
+              : 'bg-sky-500/20 border-sky-400/60 text-sky-200'
+          }`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-sky-500" />
+            <span className="font-semibold leading-snug">{noticeMessage}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {workspaceNotice.folderId && (
               <button
                 type="button"
-                onClick={clearNotice}
-                aria-label={t.board.dismissNoticeAria}
-                className="hover:opacity-80 p-0.5"
+                onClick={() => {
+                  if (workspaceNotice.folderId) {
+                    handleSelectBottomTab(workspaceNotice.folderId);
+                  }
+                }}
+                className="px-2.5 py-1 rounded-md border border-current/40 bg-current/10 hover:bg-current/20 text-[11px] font-semibold transition-colors whitespace-nowrap"
               >
-                <X className="w-4 h-4" />
+                {t.board.viewGroupBtn}
               </button>
-            </div>
-          </div>
-
-          {/* High-Visibility Floating Alert Toast Overlay */}
-          <div
-            role="alert"
-            aria-live="assertive"
-            data-testid="duplicate-alert-toast"
-            className="fixed top-14 left-1/2 -translate-x-1/2 z-[110] w-[calc(100vw-1.5rem)] max-w-lg pointer-events-auto"
-          >
-            <div
-              className={`rounded-xl border px-4 py-3 shadow-2xl flex items-start justify-between gap-3 ${
-                isDuplicateNotice
-                  ? mode === 'light'
-                    ? 'bg-[#FFFDF5] border-amber-500 text-amber-950'
-                    : 'bg-[#1D170B] border-amber-400/80 text-amber-100'
-                  : mode === 'light'
-                  ? 'bg-[#F5FAFF] border-sky-500 text-sky-950'
-                  : 'bg-[#0C1926] border-sky-400/80 text-sky-100'
-              }`}
+            )}
+            <button
+              type="button"
+              onClick={clearNotice}
+              aria-label={t.board.dismissNoticeAria}
+              className="hover:opacity-80 p-0.5"
             >
-              <div className="flex items-start gap-2.5 min-w-0">
-                <span
-                  className={`mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
-                    isDuplicateNotice
-                      ? 'bg-amber-500/20 text-amber-500'
-                      : 'bg-sky-500/20 text-sky-500'
-                  }`}
-                >
-                  <AlertTriangle className="w-4 h-4" />
-                </span>
-                <div className="min-w-0 space-y-0.5">
-                  <p className="text-xs font-bold tracking-tight">
-                    {isDuplicateNotice
-                      ? t.board.duplicateAlertTitle
-                      : t.board.sameWebsiteAlertTitle}
-                  </p>
-                  <p className="text-xs leading-relaxed opacity-95">
-                    {noticeMessage}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0">
-                {workspaceNotice.folderId && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (workspaceNotice.folderId) {
-                        handleSelectBottomTab(workspaceNotice.folderId);
-                      }
-                    }}
-                    className="px-2.5 py-1 rounded-md border border-current/35 bg-current/10 hover:bg-current/20 text-[11px] font-semibold transition-colors whitespace-nowrap"
-                  >
-                    {t.board.viewGroupBtn}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={clearNotice}
-                  aria-label={t.board.dismissNoticeAria}
-                  className="p-1 rounded-md hover:bg-current/10 transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+              <X className="w-4 h-4" />
+            </button>
           </div>
-        </>
+        </div>
       )}
 
       {/* Swiss Minimalist Board Sub-Toolbar: Tag Filter Indicator & Rich/Compact Card Density Switch */}

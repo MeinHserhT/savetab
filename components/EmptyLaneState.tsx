@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
-  AlertTriangle,
   Check,
   ClipboardPaste,
   Globe,
@@ -12,10 +11,8 @@ import {
 } from 'lucide-react';
 import { Folder, TabGroupColor } from '@/lib/types';
 import { getTabGroupStyles } from '@/components/KanbanBoard';
-import { useLinkStore } from '@/store/useLinkStore';
 import { useThemeStore } from '@/store/useThemeStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
-import { findDuplicateLinkByUrl } from '@/lib/kanban-rules';
 
 interface EmptyLaneStateProps {
   group: Folder;
@@ -35,26 +32,11 @@ export function EmptyLaneState({
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
 
-  const { links, folders } = useLinkStore();
   const { mode } = useThemeStore();
   const { t } = useLanguageStore();
   const groupStyles = getTabGroupStyles(mode);
   const colorKey: TabGroupColor = group.color ?? 'blue';
   const style = groupStyles[colorKey] ?? groupStyles.blue;
-
-  const matchedDuplicate = useMemo(() => {
-    const trimmed = inlineUrl.trim();
-    if (!trimmed || trimmed.length < 4) return null;
-    return findDuplicateLinkByUrl(trimmed, links, folders);
-  }, [inlineUrl, links, folders]);
-
-  const duplicateGroupName = useMemo(() => {
-    if (!matchedDuplicate) return '';
-    return (
-      folders.find((f) => f.id === matchedDuplicate.folder_id)?.name ||
-      t.sidebar.allSavedTabs
-    );
-  }, [matchedDuplicate, folders, t]);
 
   const isLikelyUrl = (text: string) => {
     const trimmed = text.trim();
@@ -198,21 +180,6 @@ export function EmptyLaneState({
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-
-          {matchedDuplicate && (
-            <div
-              role="alert"
-              className="p-2 rounded border border-amber-500/60 bg-amber-500/15 flex items-start gap-1.5 text-[11px] text-amber-600 dark:text-amber-300"
-            >
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
-              <span className="leading-snug font-medium">
-                {t.addModal.duplicateUrlWarning(
-                  matchedDuplicate.title || matchedDuplicate.domain,
-                  duplicateGroupName
-                )}
-              </span>
-            </div>
-          )}
         </form>
       )}
 

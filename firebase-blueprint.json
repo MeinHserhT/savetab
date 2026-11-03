@@ -238,13 +238,21 @@
       "schema": "UserProfile",
       "description": "Stores user profile metadata keyed by Firebase Auth UID."
     },
+    "/users/{userId}/folders/{folderId}": {
+      "schema": "Folder",
+      "description": "Stores user-scoped Tab Groups inside the user's document namespace."
+    },
+    "/users/{userId}/links/{linkId}": {
+      "schema": "LinkItem",
+      "description": "Stores user-scoped saved tab links inside the user's document namespace."
+    },
     "/folders/{folderId}": {
       "schema": "Folder",
-      "description": "Stores user-created Tab Groups."
+      "description": "Legacy top-level Tab Groups collection retained for automatic migration."
     },
     "/links/{linkId}": {
       "schema": "LinkItem",
-      "description": "Stores saved tab links belonging to a user's Tab Groups."
+      "description": "Legacy top-level saved links collection retained for automatic migration."
     }
   }
 }
