@@ -189,9 +189,12 @@ export function isYouTubeLink(url: string, domain?: string): boolean {
   );
 }
 
-export function resolveYouTubeChannelFromLink(
-  link: Pick<LinkItem, 'url' | 'domain' | 'channel_name' | 'description'>
-): string | null {
+export function resolveYouTubeChannelFromLink(link: {
+  url?: string;
+  domain?: string;
+  channel_name?: string | null;
+  description?: string | null;
+}): string | null {
   if (typeof link.channel_name === 'string' && link.channel_name.trim()) {
     return link.channel_name.trim();
   }
@@ -288,6 +291,22 @@ function extractCanonicalYouTubeVideoId(parsed: URL, host: string): string | nul
     }
   }
   return null;
+}
+
+export function extractYouTubeVideoIdFromUrl(rawUrl: string): string | null {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return null;
+  try {
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed);
+    const candidate = hasScheme ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(candidate);
+    const host = parsed.hostname
+      .replace(/^(www|m|mobile)\./i, '')
+      .toLowerCase();
+    return extractCanonicalYouTubeVideoId(parsed, host);
+  } catch {
+    return null;
+  }
 }
 
 export function normalizeLinkUrlKey(rawUrl: string): string {

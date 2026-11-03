@@ -7,7 +7,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  getDocFromServer,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -104,27 +103,6 @@ export function handleFirestoreError(
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
-}
-
-// Validate Connection to Firestore on client boot
-let connectionTested = false;
-export async function testFirestoreConnection(): Promise<void> {
-  if (typeof window === 'undefined' || connectionTested) return;
-  connectionTested = true;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes('the client is offline')
-    ) {
-      console.error('Please check your Firebase configuration.');
-    }
-  }
-}
-
-if (typeof window !== 'undefined') {
-  void testFirestoreConnection();
 }
 
 export function sanitizeId(rawId: string, prefix = 'id'): string {

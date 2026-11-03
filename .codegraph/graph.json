@@ -1,0 +1,327 @@
+{
+  "schemaVersion": "1.0.0",
+  "generator": "colbymchenry/codegraph",
+  "project": {
+    "name": "TabFlow — Visual Link & Knowledge Manager",
+    "framework": "Next.js 15 App Router (TypeScript)",
+    "database": "Firebase Firestore (User-Scoped Subcollections) + Local JSON Fallback",
+    "aiSdk": "@google/genai (gemini-3.5-flash)"
+  },
+  "nodes": [
+    {
+      "id": "app/layout.tsx",
+      "kind": "entrypoint",
+      "layer": "presentation",
+      "exports": ["RootLayout", "metadata"],
+      "imports": ["app/globals.css"],
+      "description": "Root Next.js App Router layout with typography, SEO metadata, and theme hydration."
+    },
+    {
+      "id": "app/page.tsx",
+      "kind": "entrypoint",
+      "layer": "presentation",
+      "exports": ["HomePage"],
+      "imports": ["components/WorkspaceShell.tsx"],
+      "description": "Primary workspace route rendering WorkspaceShell."
+    },
+    {
+      "id": "app/shared/group/page.tsx",
+      "kind": "entrypoint",
+      "layer": "presentation",
+      "exports": ["SharedGroupPage"],
+      "imports": ["lib/share-group.ts", "store/useLinkStore.ts"],
+      "description": "Import/preview route for shared TabFlow group links."
+    },
+    {
+      "id": "app/api/links/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["GET", "POST"],
+      "imports": ["lib/db.ts", "lib/scraper.ts", "lib/user-session.ts"],
+      "description": "REST endpoint for fetching workspace data and creating scraped LinkItems."
+    },
+    {
+      "id": "app/api/links/[id]/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["PATCH", "DELETE"],
+      "imports": ["lib/db.ts", "lib/user-session.ts"],
+      "description": "REST endpoint for updating or deleting a single LinkItem."
+    },
+    {
+      "id": "app/api/folders/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["POST"],
+      "imports": ["lib/db.ts", "lib/user-session.ts"],
+      "description": "REST endpoint for creating a Tab Group folder."
+    },
+    {
+      "id": "app/api/folders/import-group/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["POST"],
+      "imports": ["lib/db.ts", "lib/scraper.ts", "lib/user-session.ts"],
+      "description": "Batch endpoint for creating a Tab Group folder with multiple scraped tabs."
+    },
+    {
+      "id": "app/api/folders/reorder/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["POST"],
+      "imports": ["lib/db.ts", "lib/user-session.ts"],
+      "description": "REST endpoint for reordering Tab Group columns."
+    },
+    {
+      "id": "app/api/folders/[id]/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["PATCH", "DELETE"],
+      "imports": ["lib/db.ts", "lib/user-session.ts"],
+      "description": "REST endpoint for renaming, recoloring, collapsing, or deleting a Tab Group folder."
+    },
+    {
+      "id": "app/api/scrape/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["POST"],
+      "imports": ["lib/scraper.ts"],
+      "description": "Server-side URL metadata scraper with YouTube oEmbed/watch-page parsing and CJK translation."
+    },
+    {
+      "id": "app/api/translate/route.ts",
+      "kind": "api-route",
+      "layer": "server",
+      "exports": ["POST"],
+      "imports": ["lib/cjk-translate-server.ts"],
+      "description": "Server-side CJK (Chinese/Japanese/Korean) tab title translation endpoint using gemini-3.5-flash."
+    },
+    {
+      "id": "components/WorkspaceShell.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["WorkspaceShell"],
+      "imports": [
+        "components/Sidebar.tsx",
+        "components/KanbanBoard.tsx",
+        "components/AddLinkModal.tsx",
+        "components/CommandPalette.tsx",
+        "components/WorkspaceDndProvider.tsx",
+        "components/FirebaseErrorBoundary.tsx",
+        "store/useLinkStore.ts",
+        "store/useThemeStore.ts",
+        "store/useLanguageStore.ts"
+      ],
+      "description": "Top-level interactive shell coordinating Sidebar, KanbanBoard, modals, and keyboard shortcuts."
+    },
+    {
+      "id": "components/KanbanBoard.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["KanbanBoard"],
+      "imports": [
+        "store/useLinkStore.ts",
+        "store/useThemeStore.ts",
+        "store/useLanguageStore.ts",
+        "components/WorkspaceDndProvider.tsx",
+        "components/EmptyLaneState.tsx",
+        "lib/kanban-rules.ts",
+        "lib/tab-group-drop.ts",
+        "lib/cjk-translate.ts"
+      ],
+      "description": "Multi-column Tab Group board with sub-group clustering, chrome-tab-hover-card website preview, drag-and-drop, and auto-scroll/focus/highlight on newly added tabs."
+    },
+    {
+      "id": "components/Sidebar.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["Sidebar"],
+      "imports": [
+        "store/useLinkStore.ts",
+        "store/useThemeStore.ts",
+        "store/useLanguageStore.ts",
+        "components/AuthAccountControl.tsx",
+        "lib/tab-group-drop.ts",
+        "lib/share-group.ts"
+      ],
+      "description": "Collapsible navigation rail with nested Tab Group tree, 24-color picker, tag filters, and group sharing."
+    },
+    {
+      "id": "components/WorkspaceDndProvider.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["WorkspaceDndProvider", "useWorkspaceDnd"],
+      "imports": ["store/useLinkStore.ts", "lib/kanban-rules.ts"],
+      "description": "Unified @dnd-kit drag-and-drop context supporting cross-column card sorting and sidebar drop targets."
+    },
+    {
+      "id": "components/AddLinkModal.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["AddLinkModal"],
+      "imports": ["store/useLinkStore.ts", "store/useLanguageStore.ts", "lib/types.ts"],
+      "description": "Modal dialog for adding a URL with live metadata preview, group selection, and tag assignment."
+    },
+    {
+      "id": "components/CommandPalette.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["CommandPalette"],
+      "imports": ["store/useLinkStore.ts", "store/useLanguageStore.ts", "lib/kanban-rules.ts"],
+      "description": "Cmd/Ctrl+K search and quick-jump palette across all saved tabs and Tab Groups."
+    },
+    {
+      "id": "components/AuthAccountControl.tsx",
+      "kind": "component",
+      "layer": "presentation",
+      "exports": ["AuthAccountControl"],
+      "imports": ["lib/firebase.ts", "store/useLinkStore.ts", "store/useLanguageStore.ts"],
+      "description": "Firebase Google Authentication control managing sign-in, sign-out, and cloud sync status."
+    },
+    {
+      "id": "store/useLinkStore.ts",
+      "kind": "store",
+      "layer": "state",
+      "exports": ["useLinkStore", "AuthUserSummary", "WorkspaceNotice"],
+      "imports": ["lib/kanban-rules.ts", "lib/firebase.ts", "lib/user-session.ts", "lib/types.ts"],
+      "description": "Primary Zustand store orchestrating links, folders, optimistic updates, deduplication, highlight/focus state, and dual local+Firestore persistence."
+    },
+    {
+      "id": "store/useThemeStore.ts",
+      "kind": "store",
+      "layer": "state",
+      "exports": ["useThemeStore"],
+      "imports": ["lib/theme.ts"],
+      "description": "Zustand store managing dark/light theme persistence."
+    },
+    {
+      "id": "store/useLanguageStore.ts",
+      "kind": "store",
+      "layer": "state",
+      "exports": ["useLanguageStore"],
+      "imports": ["lib/i18n.ts"],
+      "description": "Zustand store managing English/Vietnamese UI localization."
+    },
+    {
+      "id": "lib/kanban-rules.ts",
+      "kind": "domain-module",
+      "layer": "domain",
+      "exports": [
+        "sortLaneLinks",
+        "moveAndReorderLinks",
+        "getDescendantFolderIds",
+        "filterLinks",
+        "isLegacyMockLink",
+        "isLegacySeedFolder",
+        "isYouTubeLink",
+        "resolveYouTubeChannelFromLink",
+        "extractYouTubeVideoIdFromUrl",
+        "normalizeLinkSourceDomain",
+        "normalizeLinkUrlKey",
+        "getLinkSourceBucketKey",
+        "findDuplicateLinkByUrl",
+        "deduplicateLinks",
+        "findExistingGroupForLinkSource",
+        "consolidateLinksAcrossGroups",
+        "sortGroupLinks",
+        "moveAndReorderGroupLinks",
+        "clusterGroupLinksBySource"
+      ],
+      "imports": ["lib/types.ts"],
+      "description": "Pure deterministic domain engine for URL canonicalization, deduplication, YouTube/domain sub-group clustering, and drag-and-drop lane ordering."
+    },
+    {
+      "id": "lib/firebase.ts",
+      "kind": "infrastructure",
+      "layer": "data",
+      "exports": [
+        "db",
+        "auth",
+        "googleProvider",
+        "canSyncWithFirestore",
+        "upsertUserProfileInFirestore",
+        "ensureUserWorkspaceSeededInFirestore",
+        "subscribeToUserWorkspace",
+        "createFolderInFirestore",
+        "updateFolderInFirestore",
+        "deleteFolderInFirestore",
+        "createLinkInFirestore",
+        "updateLinkInFirestore",
+        "deleteLinkInFirestore"
+      ],
+      "imports": ["firebase-applet-config.json", "lib/types.ts", "lib/kanban-rules.ts"],
+      "description": "Firebase Auth & Firestore client layer using user-scoped subcollections (/users/{uid}/folders and /users/{uid}/links) with automatic legacy top-level migration."
+    },
+    {
+      "id": "lib/db.ts",
+      "kind": "infrastructure",
+      "layer": "data",
+      "exports": [
+        "getWorkspaceData",
+        "createLink",
+        "createLinksBatch",
+        "updateLink",
+        "deleteLink",
+        "createFolder",
+        "updateFolder",
+        "reorderFolders",
+        "deleteFolder"
+      ],
+      "imports": ["lib/types.ts", "lib/kanban-rules.ts"],
+      "description": "Server-side multi-tenant JSON workspace persistence with write-serialization lock and atomic temp-file swap."
+    },
+    {
+      "id": "lib/scraper.ts",
+      "kind": "domain-module",
+      "layer": "server",
+      "exports": [
+        "validateAndNormalizeUrl",
+        "decodeHtmlEntities",
+        "extractMetaContent",
+        "extractYouTubeChannelName",
+        "parseHtmlMetadata",
+        "scrapeUrlMetadata"
+      ],
+      "imports": ["lib/types.ts", "lib/cjk-translate.ts", "lib/cjk-translate-server.ts", "lib/kanban-rules.ts"],
+      "description": "Resilient metadata scraper supporting HTML OpenGraph tags, YouTube oEmbed/noembed/watch-page fallback, and CJK title translation."
+    },
+    {
+      "id": "lib/cjk-translate-server.ts",
+      "kind": "domain-module",
+      "layer": "server",
+      "exports": ["translateCJKTitleIfNeeded", "translateCJKTitlesBatch"],
+      "imports": ["@google/genai", "lib/cjk-translate.ts"],
+      "description": "Server-side CJK title translation service powered by gemini-3.5-flash with LRU memory cache and Google GTX fallback."
+    },
+    {
+      "id": "lib/tab-group-drop.ts",
+      "kind": "domain-module",
+      "layer": "domain",
+      "exports": [
+        "pickNextTabGroupColor",
+        "parseTabGroupFromTextOrHtml",
+        "parseTabGroupFromDataTransfer",
+        "inferDefaultGroupName"
+      ],
+      "imports": ["lib/types.ts", "lib/kanban-rules.ts"],
+      "description": "Parser and deduplicator for browser tab drops, multi-URL clipboard pastes, HTML bookmark exports, and custom TabFlow JSON payloads."
+    }
+  ],
+  "firestoreCollections": [
+    {
+      "path": "/users/{userId}",
+      "entity": "UserProfile",
+      "ownerField": "uid"
+    },
+    {
+      "path": "/users/{userId}/folders/{folderId}",
+      "entity": "Folder",
+      "ownerField": "user_id"
+    },
+    {
+      "path": "/users/{userId}/links/{linkId}",
+      "entity": "LinkItem",
+      "ownerField": "user_id"
+    }
+  ]
+}

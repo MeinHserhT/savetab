@@ -5,6 +5,7 @@ import { Folder, LinkItem, LinkStatus, TabGroupColor } from '@/lib/types';
 import {
   consolidateLinksAcrossGroups,
   ConsolidateLinksResult,
+  extractYouTubeVideoIdFromUrl,
   findDuplicateLinkByUrl,
   findExistingGroupForLinkSource,
   moveAndReorderGroupLinks,
@@ -42,11 +43,10 @@ export interface AuthUserSummary {
 
 export interface WorkspaceNotice {
   id: string;
-  kind: 'duplicate-removed' | 'same-website-grouped' | 'old-duplicates-cleaned';
+  kind: 'same-website-grouped';
   sourceLabel: string;
   groupName: string;
   folderId?: string | null;
-  removedCount?: number;
 }
 
 interface CreateLinkPayload {
@@ -293,7 +293,7 @@ interface LinkStoreState {
   isLoading: boolean;
   isScraping: boolean;
   errorMessage: string | null;
-  workspaceNotice: string | null extends never ? WorkspaceNotice | null : WorkspaceNotice | null;
+  workspaceNotice: WorkspaceNotice | null;
   highlightedLinkId: string | null;
 
   fetchInitialData: () => Promise<void>;
@@ -638,19 +638,7 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
         }
 
         const fallbackDomain = parsedFallbackUrl.hostname.replace(/^www\./i, '');
-        let ytId: string | null = null;
-        if (
-          fallbackDomain === 'youtube.com' ||
-          fallbackDomain === 'm.youtube.com' ||
-          fallbackDomain === 'music.youtube.com'
-        ) {
-          ytId =
-            parsedFallbackUrl.searchParams.get('v') ||
-            parsedFallbackUrl.pathname.match(/\/(?:shorts|embed|live)\/([A-Za-z0-9_-]{6,})/)?.[1] ||
-            null;
-        } else if (fallbackDomain === 'youtu.be') {
-          ytId = parsedFallbackUrl.pathname.replace(/^\/+/, '').split('/')[0] || null;
-        }
+        const ytId = extractYouTubeVideoIdFromUrl(parsedFallbackUrl.toString());
         const fallbackFolder =
           normalizedPayloadFolderId ||
           get().folders[0]?.id ||

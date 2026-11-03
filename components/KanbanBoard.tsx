@@ -33,6 +33,7 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 import { useWorkspaceDnd } from '@/components/WorkspaceDndProvider';
 import {
   clusterGroupLinksBySource,
+  extractYouTubeVideoIdFromUrl,
   filterLinks,
   isYouTubeLink,
   resolveYouTubeChannelFromLink,
@@ -515,31 +516,6 @@ function isVideoUrl(url: string): boolean {
   );
 }
 
-function extractYouTubeVideoId(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
-    if (host === 'youtu.be') {
-      const id = parsed.pathname.split('/').filter(Boolean)[0];
-      return id && id.length >= 6 ? id : null;
-    }
-    if (host.includes('youtube.com')) {
-      const v = parsed.searchParams.get('v');
-      if (v) return v;
-      const parts = parsed.pathname.split('/').filter(Boolean);
-      if (
-        (parts[0] === 'shorts' || parts[0] === 'embed' || parts[0] === 'live' || parts[0] === 'v') &&
-        parts[1]
-      ) {
-        return parts[1];
-      }
-    }
-  } catch {
-    // Ignore invalid URLs
-  }
-  return null;
-}
-
 const attemptedImageScrapeIds = new Set<string>();
 
 function FolderDroppableWrapper({
@@ -731,7 +707,10 @@ function TabLinkRow({
   const effectiveChannelName =
     resolveYouTubeChannelFromLink(link) || resolvedChannel;
   const isYt = isYouTubeLink(link.url, link.domain);
-  const ytVideoId = useMemo(() => extractYouTubeVideoId(link.url), [link.url]);
+  const ytVideoId = useMemo(
+    () => extractYouTubeVideoIdFromUrl(link.url),
+    [link.url]
+  );
   const needsTitle = isUnresolvedYouTubeUrlAndTitle(link.url, link.title);
   const needsVideoDuration = isVideoUrl(link.url) && !effectiveVideoDuration;
   const needsYouTubeChannel = isYt && !effectiveChannelName;

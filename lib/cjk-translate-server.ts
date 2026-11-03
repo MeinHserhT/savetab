@@ -189,7 +189,7 @@ export async function translateCJKTitlesBatch(
   if (ai) {
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-3.5-flash',
         contents: `Translate any Chinese (Mandarin, Cantonese, Hokkien, Hakka, Traditional, Simplified), Korean (standard and regional dialects), or Japanese (standard and regional dialects) text in each of the following browser tab titles into natural, concise English. Preserve non-CJK words (like English or Vietnamese), numbers, and brand names. Return a JSON array of objects with "source" and "translated" properties matching the input order.\n\nInput titles:\n${JSON.stringify(
           uniqueToTranslate
         )}`,

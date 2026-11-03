@@ -1,6 +1,7 @@
 import { ScrapedMetadata } from './types';
 import { containsCJK } from './cjk-translate';
 import { translateCJKTitleIfNeeded } from './cjk-translate-server';
+import { resolveYouTubeChannelFromLink } from './kanban-rules';
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -561,20 +562,7 @@ export function extractYouTubeChannelName(link: {
   channel_name?: string | null;
   description?: string | null;
 }): string | null {
-  if (typeof link.channel_name === 'string' && link.channel_name.trim()) {
-    return link.channel_name.trim();
-  }
-  if (typeof link.description === 'string' && link.description.trim()) {
-    const match = link.description
-      .trim()
-      .match(
-        /^YouTube video by\s+(.+?)(?:\s*\((?:https?:\/\/|www\.|youtube\.com|youtu\.be)[^)]*\))?\.?$/i
-      );
-    if (match?.[1]?.trim()) {
-      return match[1].trim();
-    }
-  }
-  return null;
+  return resolveYouTubeChannelFromLink(link);
 }
 
 export function parseHtmlMetadata(html: string, rawUrl: string): ScrapedMetadata {
