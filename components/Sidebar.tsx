@@ -7,7 +7,6 @@ import {
   ChevronRight,
   FolderPlus,
   GripVertical,
-  Hash,
   Layers,
   PanelLeftClose,
   PanelLeftOpen,
@@ -284,9 +283,7 @@ export function Sidebar() {
     links,
     folders,
     activeFolderId,
-    activeTag,
     setActiveFolderId,
-    setActiveTag,
     createFolder,
     createFolderWithLinks,
     updateFolder,
@@ -347,22 +344,6 @@ export function Sidebar() {
 
     return { rootFolders: roots, childrenByParentId: childMap };
   }, [folders]);
-
-  // Extract tags & item counts for Swiss Minimalist Tag Navigation
-  const tagCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const link of links) {
-      for (const rawTag of link.tags ?? []) {
-        const tag = rawTag.trim();
-        if (!tag) continue;
-        counts.set(tag, (counts.get(tag) ?? 0) + 1);
-      }
-    }
-    return Array.from(counts.entries()).sort((a, b) => {
-      if (b[1] !== a[1]) return b[1] - a[1];
-      return a[0].localeCompare(b[0]);
-    });
-  }, [links]);
 
   useEffect(() => {
     if (!confirmDeleteFolderId) return;
@@ -791,13 +772,12 @@ export function Sidebar() {
               type="button"
               onClick={() => {
                 setActiveFolderId(null);
-                setActiveTag(null);
               }}
               title={t.sidebar.allSavedTabs}
               className={`w-full shrink-0 flex items-center ${
                 isCollapsed ? 'justify-center p-2' : 'justify-between px-2 py-1.5'
               } rounded-md text-xs font-medium transition-colors ${
-                activeFolderId === null && activeTag === null
+                activeFolderId === null
                   ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
                   : 'text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)] border border-transparent'
               }`}
@@ -872,57 +852,6 @@ export function Sidebar() {
                   </span>
                 )}
               </div>
-
-              {/* Swiss Minimalist Tag Navigation Section */}
-              {!isCollapsed && tagCounts.length > 0 && (
-                <div
-                  data-testid="sidebar-tag-navigation"
-                  className="pt-2 border-t border-[var(--tf-border)] space-y-1"
-                >
-                  <div className="px-1.5 flex items-center justify-between">
-                    <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[var(--tf-text-muted)]">
-                      {t.sidebar.tagsSectionTitle}
-                    </span>
-                    {activeTag && (
-                      <button
-                        type="button"
-                        onClick={() => setActiveTag(null)}
-                        className="text-[10px] font-mono text-[var(--tf-accent-text)] hover:underline"
-                      >
-                        {t.sidebar.clearTagFilter}
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="space-y-0.5">
-                    {tagCounts.map(([tag, count]) => {
-                      const isTagSelected = activeTag === tag;
-                      return (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() =>
-                            setActiveTag(isTagSelected ? null : tag)
-                          }
-                          className={`w-full flex items-center justify-between px-2 py-1 rounded text-xs transition-colors border ${
-                            isTagSelected
-                              ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border-[var(--tf-border-strong)] font-medium'
-                              : 'border-transparent text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] hover:bg-[var(--tf-elevated)]'
-                          }`}
-                        >
-                          <span className="flex items-center gap-1.5 min-w-0 truncate">
-                            <Hash className="w-3 h-3 shrink-0 text-[var(--tf-text-muted)]" />
-                            <span className="truncate">{tag}</span>
-                          </span>
-                          <span className="font-mono text-[10px] tabular-nums text-[var(--tf-text-muted)] ml-2 shrink-0">
-                            {count}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>

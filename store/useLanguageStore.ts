@@ -13,16 +13,13 @@ function applyLangToDocument(lang: LanguageCode) {
 interface LanguageState {
   lang: LanguageCode;
   t: Translations;
-  hydrated: boolean;
   initLanguage: () => void;
   setLanguage: (lang: LanguageCode) => void;
-  toggleLanguage: () => void;
 }
 
-export const useLanguageStore = create<LanguageState>((set, get) => ({
+export const useLanguageStore = create<LanguageState>((set) => ({
   lang: 'vi',
   t: TRANSLATIONS.vi,
-  hydrated: false,
 
   initLanguage: () => {
     if (typeof window === 'undefined') return;
@@ -32,7 +29,6 @@ export const useLanguageStore = create<LanguageState>((set, get) => ({
     set({
       lang: validLang,
       t: TRANSLATIONS[validLang],
-      hydrated: true,
     });
   },
 
@@ -45,10 +41,5 @@ export const useLanguageStore = create<LanguageState>((set, get) => ({
       lang,
       t: TRANSLATIONS[lang],
     });
-  },
-
-  toggleLanguage: () => {
-    const next: LanguageCode = get().lang === 'vi' ? 'en' : 'vi';
-    get().setLanguage(next);
   },
 }));

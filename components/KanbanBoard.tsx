@@ -11,7 +11,6 @@ import {
   FolderPlus,
   Globe,
   GripVertical,
-  Hash,
   Image as ImageIcon,
   LayoutGrid,
   List,
@@ -34,7 +33,7 @@ import { useWorkspaceDnd } from '@/components/WorkspaceDndProvider';
 import {
   clusterGroupLinksBySource,
   extractYouTubeVideoIdFromUrl,
-  filterLinks,
+  isPlaceholderLikeTitle,
   isYouTubeLink,
   resolveYouTubeChannelFromLink,
   sortGroupLinks,
@@ -46,8 +45,8 @@ import {
   LinkStatus,
   TAB_GROUP_COLORS,
   TabGroupColor,
+  ThemeMode,
 } from '@/lib/types';
-import { ThemeMode } from '@/lib/theme';
 import { EmptyLaneState } from '@/components/EmptyLaneState';
 import {
   inferDefaultGroupName,
@@ -483,23 +482,6 @@ export function getTabGroupStyles(
 
 export const COLOR_KEYS: TabGroupColor[] = [...TAB_GROUP_COLORS];
 
-function isUnresolvedYouTubeUrlAndTitle(url: string, title: string): boolean {
-  const lowerUrl = url.toLowerCase();
-  const isYt =
-    lowerUrl.includes('youtube.com/') || lowerUrl.includes('youtu.be/');
-  if (!isYt) return false;
-  const normalizedTitle = title.trim().toLowerCase();
-  return (
-    !normalizedTitle ||
-    normalizedTitle === '- youtube' ||
-    normalizedTitle === 'youtube' ||
-    normalizedTitle === 'watch - youtube' ||
-    normalizedTitle === 'watch — youtube.com' ||
-    normalizedTitle.startsWith('youtube clip (') ||
-    normalizedTitle === 'before you continue to youtube'
-  );
-}
-
 function isVideoUrl(url: string): boolean {
   const lower = url.toLowerCase();
   return (
@@ -711,7 +693,7 @@ function TabLinkRow({
     () => extractYouTubeVideoIdFromUrl(link.url),
     [link.url]
   );
-  const needsTitle = isUnresolvedYouTubeUrlAndTitle(link.url, link.title);
+  const needsTitle = isYt && isPlaceholderLikeTitle(link.title);
   const needsVideoDuration = isVideoUrl(link.url) && !effectiveVideoDuration;
   const needsYouTubeChannel = isYt && !effectiveChannelName;
   const needsCoverImage =
@@ -1004,7 +986,7 @@ function TabLinkRow({
               </div>
             </a>
 
-            {/* Right Action: Close/Delete Tab Button */}
+            {/* Close/Delete Tab Button */}
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
@@ -1285,7 +1267,6 @@ export function KanbanBoard({
     links,
     folders,
     activeFolderId,
-    activeTag,
     cardDensity,
     newlyCreatedGroupId,
     isImportingGroup,
@@ -1294,7 +1275,6 @@ export function KanbanBoard({
     workspaceNotice,
     highlightedLinkId,
     setActiveFolderId,
-    setActiveTag,
     setCardDensity,
     clearNewlyCreatedGroupId,
     clearError,
@@ -1527,16 +1507,6 @@ export function KanbanBoard({
     return () => window.removeEventListener('paste', handleGlobalPaste);
   }, [handleCreateGroupFromParsedPayload, addLink, focusedGroupId]);
 
-  const filteredLinks = useMemo(
-    () =>
-      filterLinks(links, folders, {
-        folderId: null,
-        tag: activeTag,
-        searchQuery: '',
-      }),
-    [links, folders, activeTag]
-  );
-
   const folderIdSet = useMemo(
     () => new Set(folders.map((f) => f.id)),
     [folders]
@@ -1545,7 +1515,7 @@ export function KanbanBoard({
   const visibleGroups = useMemo(() => {
     const baseGroups = folders;
 
-    const hasUngroupedLinks = filteredLinks.some(
+    const hasUngroupedLinks = links.some(
       (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
     );
 
@@ -1563,7 +1533,7 @@ export function KanbanBoard({
     }
 
     return baseGroups;
-  }, [folders, filteredLinks, folderIdSet, t.sidebar.allSavedTabs]);
+  }, [folders, links, folderIdSet, t.sidebar.allSavedTabs]);
 
   const commitEditingGroup = async (groupId: string) => {
     const trimmed = editingGroupName.trim();
@@ -2068,27 +2038,12 @@ export function KanbanBoard({
         </div>
       )}
 
-      {/* Swiss Minimalist Board Sub-Toolbar: Tag Filter Indicator & Rich/Compact Card Density Switch */}
+      {/* Swiss Minimalist Board Sub-Toolbar: Group/Tab Counter & Rich/Compact Card Density Switch */}
       <div className="px-3 sm:px-4 lg:px-6 pt-2.5 pb-1.5 border-b border-[var(--tf-border)] bg-[var(--tf-surface)]/45 flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          {activeTag ? (
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-xs border border-[var(--tf-border-strong)] bg-[var(--tf-elevated)] text-[11px] font-mono text-[var(--tf-text)]">
-              <Hash className="w-3 h-3 text-[var(--tf-accent)] shrink-0" />
-              <span className="truncate">{t.board.filteredByTagLabel(activeTag)}</span>
-              <button
-                type="button"
-                onClick={() => setActiveTag(null)}
-                aria-label={t.sidebar.clearTagFilter}
-                className="ml-1 text-[var(--tf-text-muted)] hover:text-[var(--tf-text)]"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : (
-            <span className="text-[11px] font-mono text-[var(--tf-text-muted)] tabular-nums truncate">
-              {visibleGroups.length} · {filteredLinks.length} {t.sidebar.tabUnit}
-            </span>
-          )}
+          <span className="text-[11px] font-mono text-[var(--tf-text-muted)] tabular-nums truncate">
+            {visibleGroups.length} · {links.length} {t.sidebar.tabUnit}
+          </span>
         </div>
 
         <div
@@ -2234,10 +2189,10 @@ export function KanbanBoard({
               const style = groupStyles[colorKey] ?? groupStyles.blue;
               const groupLinks = sortGroupLinks(
                 group.id === '__ungrouped__'
-                  ? filteredLinks.filter(
+                  ? links.filter(
                       (l) => !l.folder_id || !folderIdSet.has(l.folder_id)
                     )
-                  : filteredLinks.filter((l) => l.folder_id === group.id)
+                  : links.filter((l) => l.folder_id === group.id)
               );
               const isDropTarget =
                 dragOverGroupId === group.id ||

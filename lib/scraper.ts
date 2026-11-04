@@ -1,7 +1,14 @@
 import { ScrapedMetadata } from './types';
 import { containsCJK } from './cjk-translate';
 import { translateCJKTitleIfNeeded } from './cjk-translate-server';
-import { resolveYouTubeChannelFromLink } from './kanban-rules';
+import {
+  decodeHtmlEntities,
+  extractYouTubeVideoIdFromUrl,
+  isPlaceholderLikeTitle,
+  resolveYouTubeChannelFromLink,
+} from './kanban-rules';
+
+export { decodeHtmlEntities };
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -21,20 +28,6 @@ export function validateAndNormalizeUrl(rawInput: string): URL {
     throw new Error('Please enter a valid domain name.');
   }
   return parsed;
-}
-
-export function decodeHtmlEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&#x27;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 export function extractMetaContent(html: string, keys: string[]): string | null {
@@ -105,22 +98,8 @@ export function estimateReadingMinutes(htmlOrText: string, description: string):
   return Math.max(3, Math.min(18, Math.round(descWords / 6) + 3));
 }
 
-const GENERIC_PLACEHOLDER_TITLES = new Set([
-  '- youtube',
-  'youtube',
-  'watch - youtube',
-  'watch — youtube.com',
-  'before you continue to youtube',
-  'just a moment...',
-  'attention required! | cloudflare',
-  'access denied',
-]);
-
 export function isGenericPlaceholderTitle(rawTitle: string | null | undefined): boolean {
-  if (!rawTitle) return true;
-  const cleaned = rawTitle.trim();
-  if (cleaned.length <= 1) return true;
-  return GENERIC_PLACEHOLDER_TITLES.has(cleaned.toLowerCase());
+  return isPlaceholderLikeTitle(rawTitle);
 }
 
 export function cleanScrapedTitle(rawTitle: string | null | undefined): string | null {
@@ -135,26 +114,7 @@ export function cleanScrapedTitle(rawTitle: string | null | undefined): string |
 }
 
 export function extractYouTubeVideoId(url: URL): string | null {
-  const host = url.hostname.replace(/^(www|m|music)\./i, '').toLowerCase();
-  if (host === 'youtu.be') {
-    const id = url.pathname.split('/').filter(Boolean)[0];
-    return id && /^[\w-]{6,20}$/.test(id) ? id : null;
-  }
-  if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-    const vParam = url.searchParams.get('v');
-    if (vParam && /^[\w-]{6,20}$/.test(vParam)) {
-      return vParam;
-    }
-    const segments = url.pathname.split('/').filter(Boolean);
-    if (
-      segments.length >= 2 &&
-      ['shorts', 'embed', 'live', 'v'].includes(segments[0].toLowerCase())
-    ) {
-      const id = segments[1];
-      return id && /^[\w-]{6,20}$/.test(id) ? id : null;
-    }
-  }
-  return null;
+  return extractYouTubeVideoIdFromUrl(url.toString());
 }
 
 export function humanizeFallbackTitle(url: URL): string {

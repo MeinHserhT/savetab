@@ -1,12 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import {
-  Link2,
-  Loader2,
-  Upload,
-  X,
-} from 'lucide-react';
+import { Link2, Loader2, Upload, X } from 'lucide-react';
 import { useLinkStore } from '@/store/useLinkStore';
 import { useLanguageStore } from '@/store/useLanguageStore';
 import { LinkStatus } from '@/lib/types';
@@ -25,12 +20,7 @@ export function AddLinkModal({
   defaultFolderId = null,
   onClose,
 }: AddLinkModalProps) {
-  const {
-    folders,
-    activeFolderId,
-    addLink,
-    isScraping,
-  } = useLinkStore();
+  const { folders, activeFolderId, addLink, isScraping } = useLinkStore();
   const { t } = useLanguageStore();
 
   const [url, setUrl] = useState('');
@@ -192,4 +182,3 @@ export function AddLinkModal({
     </div>
   );
 }
-

@@ -1,5 +1,5 @@
-import { TAB_GROUP_COLORS, TabGroupColor } from './types';
-import { normalizeLinkUrlKey } from './kanban-rules';
+import { TabGroupColor } from './types';
+import { decodeHtmlEntities, normalizeLinkUrlKey } from './kanban-rules';
 
 export interface ParsedTabItem {
   url: string;
@@ -129,16 +129,6 @@ function normalizeCandidateUrl(raw: string): string | null {
   }
 }
 
-function decodeHtmlEntities(input: string): string {
-  return input
-    .replace(/&amp;/gi, '&')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&nbsp;/gi, ' ')
-    .trim();
-}
 
 function tryParseJsonGroupPayload(raw: string): ParsedTabGroupDrop | null {
   const trimmed = raw.trim();

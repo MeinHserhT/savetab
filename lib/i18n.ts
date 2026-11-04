@@ -4,7 +4,6 @@ export type LanguageCode = 'vi' | 'en';
 
 export interface Translations {
   header: {
-    allGroupsAria: string;
     languageSelectorAria: string;
     langViLabel: string;
     langEnLabel: string;
@@ -16,8 +15,6 @@ export interface Translations {
   };
   theme: {
     selectorAria: string;
-    light: string;
-    dark: string;
     lightTitle: string;
     darkTitle: string;
   };
@@ -50,15 +47,10 @@ export interface Translations {
     addSubfolderAria: (parentName: string) => string;
     parentGroupLabel: string;
     topLevelGroupOption: string;
-    tagsSectionTitle: string;
-    clearTagFilter: string;
   };
   board: {
     dismissErrorAria: string;
     tabGroupAria: (name: string) => string;
-    toggleGroupAria: (name: string) => string;
-    expandGroupTitle: string;
-    collapseGroupTitle: string;
     editGroupTitle: string;
     dragGroupTitle: string;
     changeColorAria: (name: string) => string;
@@ -68,7 +60,6 @@ export interface Translations {
     addLinkToGroupAria: (name: string) => string;
     addLinkToGroupTitle: (name: string) => string;
     dropToAdd: (name: string) => string;
-    openInNewTabAria: (title: string) => string;
     deleteLinkAria: (title: string) => string;
     bottomNavAria: string;
     scrollLeftAria: string;
@@ -87,22 +78,16 @@ export interface Translations {
     creatingGroupStatus: string;
     dismissNoticeAria: string;
     viewGroupBtn: string;
-    duplicateAlertTitle: string;
-    sameWebsiteAlertTitle: string;
-    duplicateWebsiteNotice: (domainOrTitle: string, groupName: string) => string;
     sameWebsiteGroupedNotice: (sourceLabel: string, groupName: string) => string;
-    removedOldDuplicatesNotice: (count: number) => string;
     cardViewRich: string;
     cardViewCompact: string;
     readingEstimateLabel: (minutes: number) => string;
     ogCoverPlaceholderLabel: string;
-    filteredByTagLabel: (tag: string) => string;
     colors: Record<TabGroupColor, string>;
   };
   chromeImport: {
     modalTitle: string;
     closeAria: string;
-    tabPaste: string;
     groupNameOptionalLabel: string;
     groupNameOptionalPlaceholder: string;
     colorLabel: string;
@@ -143,9 +128,6 @@ export interface Translations {
     dropIdleHint: string;
     errEmptyUrl: string;
     errInvalidDrop: string;
-    duplicateUrlWarning: (titleOrDomain: string, groupName: string) => string;
-    duplicateSubmittedDesc: (titleOrDomain: string, groupName: string) => string;
-    tryAnotherUrl: string;
   };
   auth: {
     loading: string;
@@ -202,7 +184,6 @@ export interface Translations {
 export const TRANSLATIONS: Record<LanguageCode, Translations> = {
   vi: {
     header: {
-      allGroupsAria: 'Xem tất cả nhóm tab',
       languageSelectorAria: 'Chọn ngôn ngữ giao diện',
       langViLabel: 'VI',
       langEnLabel: 'EN',
@@ -215,8 +196,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
     },
     theme: {
       selectorAria: 'Chọn chế độ giao diện Sáng / Tối',
-      light: 'Sáng',
-      dark: 'Tối',
       lightTitle: 'Giao diện Sáng (#FFFAFF · #0A2463 · #3E92CC · #D8315B)',
       darkTitle:
         'Giao diện Tối (Đen #090A0D · Xám #12141A / #262A34 · Trắng ánh xanh #F0F7FF)',
@@ -252,15 +231,10 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       addSubfolderAria: (parentName) => `Tạo thư mục con trong ${parentName}`,
       parentGroupLabel: 'Thuộc thư mục cha',
       topLevelGroupOption: 'Thư mục gốc (Cấp 1)',
-      tagsSectionTitle: 'THẺ PHÂN LOẠI (TAGS)',
-      clearTagFilter: 'Bỏ lọc',
     },
     board: {
       dismissErrorAria: 'Đóng thông báo lỗi',
       tabGroupAria: (name) => `Nhóm tab ${name}`,
-      toggleGroupAria: (name) => `Thu gọn hoặc mở rộng nhóm ${name}`,
-      expandGroupTitle: 'Mở rộng nhóm',
-      collapseGroupTitle: 'Thu gọn nhóm',
       editGroupTitle: 'Nhấn để sửa tên nhóm',
       dragGroupTitle: 'Giữ và kéo để đổi vị trí nhóm tab',
       changeColorAria: (name) => `Đổi màu cho nhóm ${name}`,
@@ -270,7 +244,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       addLinkToGroupAria: (name) => `Thêm liên kết vào nhóm ${name}`,
       addLinkToGroupTitle: (name) => `Thêm liên kết vào ${name}`,
       dropToAdd: (name) => `Thả tab hoặc URL để thêm vào ${name}`,
-      openInNewTabAria: (title) => `Mở ${title} trong tab mới`,
       deleteLinkAria: (title) => `Xoá ${title}`,
       bottomNavAria: 'Thanh chọn nhanh nhóm tab',
       scrollLeftAria: 'Cuộn bảng sang trái',
@@ -291,19 +264,12 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       creatingGroupStatus: 'Đang tạo Tab Group mới...',
       dismissNoticeAria: 'Đóng thông báo',
       viewGroupBtn: 'Xem nhóm',
-      duplicateAlertTitle: 'Phát hiện liên kết trùng lặp!',
-      sameWebsiteAlertTitle: 'Đã tự động gộp nhóm',
-      duplicateWebsiteNotice: (domainOrTitle, groupName) =>
-        `Trang web "${domainOrTitle}" đã có trong nhóm "${groupName}". Đã tự động xoá tab trùng lặp.`,
       sameWebsiteGroupedNotice: (sourceLabel, groupName) =>
         `Cùng trang web/kênh "${sourceLabel}" — đã tự động gộp vào nhóm "${groupName}".`,
-      removedOldDuplicatesNotice: (count) =>
-        `Đã tự động xoá ${count} tab trùng lặp trong không gian làm việc.`,
       cardViewRich: 'Thẻ Rich (OG)',
       cardViewCompact: 'Thu gọn',
       readingEstimateLabel: (minutes) => `${minutes} phút đọc`,
       ogCoverPlaceholderLabel: 'Bản xem trước OpenGraph',
-      filteredByTagLabel: (tag) => `Đang lọc theo thẻ #${tag}`,
       colors: {
         blue: 'Xanh da trời',
         ocean: 'Xanh đại dương',
@@ -334,7 +300,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
     chromeImport: {
       modalTitle: 'Nhập Tab Group vào TabFlow',
       closeAria: 'Đóng hộp thoại nhập Tab Group',
-      tabPaste: 'Dán nhanh URL / Bookmark',
       groupNameOptionalLabel:
         'Tên nhóm (để trống để tự đặt tên & focus sửa ngay sau khi tạo)',
       groupNameOptionalPlaceholder: 'VD: Nghiên cứu UI/UX (tùy chọn)',
@@ -382,11 +347,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropIdleHint: 'Kéo & thả liên kết bất kỳ vào ô này hoặc nhấn Enter',
       errEmptyUrl: 'Vui lòng nhập hoặc kéo thả một URL hợp lệ.',
       errInvalidDrop: 'Không đọc được URL hợp lệ từ mục vừa thả.',
-      duplicateUrlWarning: (titleOrDomain, groupName) =>
-        `Cảnh báo trùng lặp: Trang web "${titleOrDomain}" đã có sẵn trong nhóm "${groupName}". Nếu bấm Lưu, tab trùng lặp sẽ tự động được gộp và xoá bỏ.`,
-      duplicateSubmittedDesc: (titleOrDomain, groupName) =>
-        `Liên kết "${titleOrDomain}" đã tồn tại trên bảng TabFlow của bạn trong nhóm "${groupName}". Hệ thống đã giữ lại tab hiện có và ngăn tạo bản sao trùng lặp.`,
-      tryAnotherUrl: 'Nhập URL khác',
     },
     auth: {
       loading: 'Đang tải...',
@@ -445,7 +405,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
   },
   en: {
     header: {
-      allGroupsAria: 'View all tab groups',
       languageSelectorAria: 'Select interface language',
       langViLabel: 'VI',
       langEnLabel: 'EN',
@@ -458,8 +417,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
     },
     theme: {
       selectorAria: 'Select Light or Dark theme mode',
-      light: 'Light',
-      dark: 'Dark',
       lightTitle: 'Light Theme (#FFFAFF · #0A2463 · #3E92CC · #D8315B)',
       darkTitle:
         'Dark Theme (Black #090A0D · Slate #12141A / #262A34 · Ice White #F0F7FF)',
@@ -495,15 +452,10 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       addSubfolderAria: (parentName) => `Add subfolder inside ${parentName}`,
       parentGroupLabel: 'Parent Folder',
       topLevelGroupOption: 'Root Level (Top Folder)',
-      tagsSectionTitle: 'TAGS',
-      clearTagFilter: 'Clear',
     },
     board: {
       dismissErrorAria: 'Dismiss error',
       tabGroupAria: (name) => `Tab group ${name}`,
-      toggleGroupAria: (name) => `Toggle ${name} group`,
-      expandGroupTitle: 'Expand group',
-      collapseGroupTitle: 'Collapse group',
       editGroupTitle: 'Click to edit group name',
       dragGroupTitle: 'Hold and drag to reorder tab group',
       changeColorAria: (name) => `Change color for ${name}`,
@@ -513,7 +465,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       addLinkToGroupAria: (name) => `Add link to ${name}`,
       addLinkToGroupTitle: (name) => `Add link to ${name}`,
       dropToAdd: (name) => `Drop tab or URL to add to ${name}`,
-      openInNewTabAria: (title) => `Open ${title} in new tab`,
       deleteLinkAria: (title) => `Delete ${title}`,
       bottomNavAria: 'Bottom tab group selection',
       scrollLeftAria: 'Scroll board left',
@@ -534,19 +485,12 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       creatingGroupStatus: 'Creating new Tab Group...',
       dismissNoticeAria: 'Dismiss notification',
       viewGroupBtn: 'View group',
-      duplicateAlertTitle: 'Duplicate Link Detected!',
-      sameWebsiteAlertTitle: 'Auto-Grouped by Website',
-      duplicateWebsiteNotice: (domainOrTitle, groupName) =>
-        `Website "${domainOrTitle}" is already in group "${groupName}". Duplicate tab was removed.`,
       sameWebsiteGroupedNotice: (sourceLabel, groupName) =>
         `Same website/channel "${sourceLabel}" detected — automatically grouped into "${groupName}".`,
-      removedOldDuplicatesNotice: (count) =>
-        `Automatically removed ${count} duplicate tab(s) from your workspace.`,
       cardViewRich: 'Rich Cards',
       cardViewCompact: 'Compact',
       readingEstimateLabel: (minutes) => `${minutes}m read`,
       ogCoverPlaceholderLabel: 'OpenGraph Preview',
-      filteredByTagLabel: (tag) => `Filtered by #${tag}`,
       colors: {
         blue: 'Sky Blue',
         ocean: 'Ocean Blue',
@@ -577,7 +521,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
     chromeImport: {
       modalTitle: 'Import Tab Group into TabFlow',
       closeAria: 'Close Tab Group import modal',
-      tabPaste: 'Quick Paste URLs / Bookmark',
       groupNameOptionalLabel:
         'Group Name (leave blank to auto-name & focus inline rename upon creation)',
       groupNameOptionalPlaceholder: 'e.g. Design Research (optional)',
@@ -626,11 +569,6 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       dropIdleHint: 'Drag & drop any link into this box or press Enter',
       errEmptyUrl: 'Please enter or drop a valid URL.',
       errInvalidDrop: 'Could not read a valid URL from the dropped item.',
-      duplicateUrlWarning: (titleOrDomain, groupName) =>
-        `Duplicate Alert: Website "${titleOrDomain}" is already in group "${groupName}". Saving will merge and remove the duplicate tab.`,
-      duplicateSubmittedDesc: (titleOrDomain, groupName) =>
-        `The link "${titleOrDomain}" already exists on your TabFlow board in group "${groupName}". The existing tab was kept and duplicate creation was prevented.`,
-      tryAnotherUrl: 'Try another URL',
     },
     auth: {
       loading: 'Loading...',

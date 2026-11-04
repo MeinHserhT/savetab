@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
   Folder,
@@ -15,8 +16,6 @@ import {
   isLegacyMockLink,
   isLegacySeedFolder,
   moveAndReorderGroupLinks,
-  moveAndReorderLinks,
-  sortLaneLinks,
 } from './kanban-rules';
 
 interface DatabaseState {
@@ -32,17 +31,44 @@ const DEFAULT_USER: User = {
   created_at: '2026-10-01T08:00:00.000Z',
 };
 
-const DB_FILE_PATH = path.join(process.cwd(), '.data', 'tabflow-db.json');
+const BUNDLED_DB_FILE_PATH = path.join(process.cwd(), '.data', 'tabflow-db.json');
+const TMP_DB_FILE_PATH = path.join(os.tmpdir(), 'tabflow-data', 'tabflow-db.json');
+
+function isServerlessReadOnlyEnv(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.NETLIFY ||
+      process.env.CF_PAGES
+  );
+}
+
+let activeDbFilePath: string = process.env.TABFLOW_DATA_DIR
+  ? path.join(process.env.TABFLOW_DATA_DIR, 'tabflow-db.json')
+  : isServerlessReadOnlyEnv()
+  ? TMP_DB_FILE_PATH
+  : BUNDLED_DB_FILE_PATH;
 
 let memoryStore: DatabaseState | null = null;
 
 const DEFAULT_COLORS = TAB_GROUP_COLORS;
 
+function resolveReadableDbFilePath(): string | null {
+  if (fs.existsSync(activeDbFilePath)) {
+    return activeDbFilePath;
+  }
+  if (activeDbFilePath !== BUNDLED_DB_FILE_PATH && fs.existsSync(BUNDLED_DB_FILE_PATH)) {
+    return BUNDLED_DB_FILE_PATH;
+  }
+  return null;
+}
+
 function loadStore(): DatabaseState {
   if (memoryStore) return memoryStore;
   try {
-    if (fs.existsSync(DB_FILE_PATH)) {
-      const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
+    const readablePath = resolveReadableDbFilePath();
+    if (readablePath) {
+      const raw = fs.readFileSync(readablePath, 'utf-8');
       const parsed = JSON.parse(raw) as DatabaseState;
       if (Array.isArray(parsed.links) && Array.isArray(parsed.folders)) {
         const realLinks = parsed.links.filter((l) => !isLegacyMockLink(l));
@@ -87,14 +113,26 @@ function loadStore(): DatabaseState {
 
 function persistStore(state: DatabaseState): void {
   memoryStore = state;
+  const serialized = JSON.stringify(state, null, 2);
   try {
-    const dir = path.dirname(DB_FILE_PATH);
+    const dir = path.dirname(activeDbFilePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(state, null, 2), 'utf-8');
+    fs.writeFileSync(activeDbFilePath, serialized, 'utf-8');
   } catch {
-    // Ephemeral container fallback keeps memoryStore intact
+    if (activeDbFilePath !== TMP_DB_FILE_PATH) {
+      try {
+        activeDbFilePath = TMP_DB_FILE_PATH;
+        const tmpDir = path.dirname(TMP_DB_FILE_PATH);
+        if (!fs.existsSync(tmpDir)) {
+          fs.mkdirSync(tmpDir, { recursive: true });
+        }
+        fs.writeFileSync(TMP_DB_FILE_PATH, serialized, 'utf-8');
+      } catch {
+        // Ephemeral container fallback keeps memoryStore intact
+      }
+    }
   }
 }
 
@@ -336,6 +374,7 @@ export function updateLinkById(
     target_link_id !== undefined ||
     position !== undefined ||
     restPatch.folder_id !== undefined ||
+    restPatch.order_index !== undefined ||
     (autoMatchedFolderId && autoMatchedFolderId !== existing.folder_id)
   ) {
     const targetFolderId =
@@ -349,16 +388,6 @@ export function updateLinkById(
       position,
       targetIndex: restPatch.order_index,
     });
-  } else if (
-    restPatch.status !== undefined ||
-    restPatch.order_index !== undefined
-  ) {
-    const targetStatus = restPatch.status ?? existing.status;
-    const targetIndex =
-      restPatch.order_index !== undefined
-        ? restPatch.order_index
-        : sortLaneLinks(userLinks, targetStatus).findIndex((l) => l.id === id);
-    userLinks = moveAndReorderLinks(userLinks, id, targetStatus, targetIndex);
   }
 
   const otherLinks = store.links.filter((item) => item.user_id !== userId);
@@ -389,21 +418,14 @@ export function deleteLinkById(
   const remainingUserLinks = store.links.filter(
     (item) => item.user_id === userId && item.id !== id
   );
-  const statuses = [LinkStatus.UNREAD, LinkStatus.READING, LinkStatus.ARCHIVED];
-  const normalizedUserLinks: LinkItem[] = [];
-  for (const status of statuses) {
-    sortLaneLinks(remainingUserLinks, status).forEach((item, idx) => {
-      normalizedUserLinks.push({ ...item, order_index: idx });
-    });
-  }
 
   const otherLinks = store.links.filter((item) => item.user_id !== userId);
   persistStore({
     ...store,
-    links: [...normalizedUserLinks, ...otherLinks],
+    links: [...remainingUserLinks, ...otherLinks],
   });
 
-  return { deleted: true, links: normalizedUserLinks };
+  return { deleted: true, links: remainingUserLinks };
 }
 
 export function insertFolder(

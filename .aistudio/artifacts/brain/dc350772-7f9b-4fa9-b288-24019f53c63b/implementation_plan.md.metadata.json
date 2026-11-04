@@ -1,6 +1,6 @@
 {
-  "summary": "Phân tích chi tiết điểm mạnh/yếu của 3 mô hình cấu trúc Firestore cho TabFlow và kế hoạch nâng cấp sang mô hình Subcollection dưới User (/users/{uid}/folders và /users/{uid}/links) kèm cơ chế tự động di chuyển dữ liệu cũ.",
-  "updatedAt": "2026-11-03T04:51:43.628779721Z",
+  "summary": "Implementation plan for TabFlow's AI OpenGraph Category Tagging utility covering hybrid workspace-aware tag generation (2–3 lowercase tags per link), automatic tagging on link save/drop, live tag preview in the Add Link modal, and one-click AI re-tagging on existing cards.",
+  "updatedAt": "2026-11-04T03:38:30.847268112Z",
   "requestFeedback": true,
   "userFacing": true
 }

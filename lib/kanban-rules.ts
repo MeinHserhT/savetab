@@ -1,76 +1,17 @@
-import { Folder, LinkItem, LinkStatus } from './types';
+import { Folder, LinkItem } from './types';
 
-export function sortLaneLinks(links: LinkItem[], status: LinkStatus): LinkItem[] {
-  return links
-    .filter((item) => item.status === status)
-    .slice()
-    .sort((a, b) => {
-      if (a.order_index !== b.order_index) {
-        return a.order_index - b.order_index;
-      }
-      return a.created_at.localeCompare(b.created_at);
-    });
-}
-
-/**
- * Pure deterministic transition for moving a card within the same lane
- * or across lanes (including into an empty lane) while normalizing
- * contiguous 0..n-1 `order_index` values in every lane.
- */
-export function moveAndReorderLinks(
-  allLinks: LinkItem[],
-  linkId: string,
-  targetStatus: LinkStatus,
-  targetIndex?: number
-): LinkItem[] {
-  const movingLink = allLinks.find((item) => item.id === linkId);
-  if (!movingLink) {
-    return allLinks;
-  }
-
-  const statuses: LinkStatus[] = [
-    LinkStatus.UNREAD,
-    LinkStatus.READING,
-    LinkStatus.ARCHIVED,
-  ];
-
-  const updatedByLane: Record<LinkStatus, LinkItem[]> = {
-    [LinkStatus.UNREAD]: [],
-    [LinkStatus.READING]: [],
-    [LinkStatus.ARCHIVED]: [],
-  };
-
-  for (const status of statuses) {
-    updatedByLane[status] = sortLaneLinks(allLinks, status).filter(
-      (item) => item.id !== linkId
-    );
-  }
-
-  const destinationList = updatedByLane[targetStatus];
-  const clampedIndex =
-    typeof targetIndex === 'number'
-      ? Math.max(0, Math.min(destinationList.length, targetIndex))
-      : destinationList.length;
-
-  const transitionedLink: LinkItem = {
-    ...movingLink,
-    status: targetStatus,
-    updated_at: new Date().toISOString(),
-  };
-
-  destinationList.splice(clampedIndex, 0, transitionedLink);
-
-  const normalizedResult: LinkItem[] = [];
-  for (const status of statuses) {
-    updatedByLane[status].forEach((item, index) => {
-      normalizedResult.push({
-        ...item,
-        order_index: index,
-      });
-    });
-  }
-
-  return normalizedResult;
+export function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&#x27;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&ndash;/gi, '–')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function getDescendantFolderIds(folders: Folder[], rootFolderId: string): Set<string> {
@@ -86,39 +27,6 @@ export function getDescendantFolderIds(folders: Folder[], rootFolderId: string):
     }
   }
   return result;
-}
-
-export interface LinkFilterCriteria {
-  folderId: string | null;
-  tag: string | null;
-  searchQuery: string;
-}
-
-export function filterLinks(
-  links: LinkItem[],
-  folders: Folder[],
-  criteria: LinkFilterCriteria
-): LinkItem[] {
-  const allowedFolders = criteria.folderId
-    ? getDescendantFolderIds(folders, criteria.folderId)
-    : null;
-  const normalizedQuery = criteria.searchQuery.trim().toLowerCase();
-
-  return links.filter((link) => {
-    if (allowedFolders && (!link.folder_id || !allowedFolders.has(link.folder_id))) {
-      return false;
-    }
-    if (criteria.tag && !link.tags.includes(criteria.tag)) {
-      return false;
-    }
-    if (normalizedQuery) {
-      const haystack = `${link.title} ${link.description} ${link.domain} ${link.tags.join(' ')}`.toLowerCase();
-      if (!haystack.includes(normalizedQuery)) {
-        return false;
-      }
-    }
-    return true;
-  });
 }
 
 const LEGACY_MOCK_LINK_URLS = new Set([
@@ -411,15 +319,26 @@ function compareLinksByFirstAppearance(
   return a.id.localeCompare(b.id);
 }
 
-function isPlaceholderLikeTitle(title: string | undefined, domain?: string): boolean {
+const GENERIC_PLACEHOLDER_TITLES = new Set([
+  '- youtube',
+  'youtube',
+  'watch - youtube',
+  'watch — youtube.com',
+  'before you continue to youtube',
+  'just a moment...',
+  'attention required! | cloudflare',
+  'access denied',
+]);
+
+export function isPlaceholderLikeTitle(
+  title: string | null | undefined,
+  domain?: string
+): boolean {
   const trimmed = (title || '').trim().toLowerCase();
-  if (!trimmed) return true;
+  if (trimmed.length <= 1) return true;
   if (
-    trimmed === 'youtube' ||
-    trimmed === '- youtube' ||
-    trimmed === 'watch - youtube' ||
-    trimmed.startsWith('youtube clip (') ||
-    trimmed === 'before you continue to youtube'
+    GENERIC_PLACEHOLDER_TITLES.has(trimmed) ||
+    trimmed.startsWith('youtube clip (')
   ) {
     return true;
   }

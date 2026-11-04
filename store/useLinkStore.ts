@@ -8,6 +8,7 @@ import {
   extractYouTubeVideoIdFromUrl,
   findDuplicateLinkByUrl,
   findExistingGroupForLinkSource,
+  isPlaceholderLikeTitle,
   moveAndReorderGroupLinks,
   normalizeLinkSourceDomain,
   normalizeLinkUrlKey,
@@ -109,8 +110,11 @@ function writeVideoMetaCache(
   }
   try {
     const cache = readVideoMetaCache();
+    const urlKey = url ? normalizeLinkUrlKey(url) || url.trim() : '';
     const prevById = cache[`id:${id}`] ?? {};
-    const prevByUrl = url ? (cache[`url:${url.trim()}`] ?? {}) : {};
+    const prevByUrl = urlKey
+      ? (cache[`url:${urlKey}`] ?? (url ? cache[`url:${url.trim()}`] : undefined) ?? {})
+      : {};
     const merged: CachedVideoMeta = {
       ...prevByUrl,
       ...prevById,
@@ -121,6 +125,9 @@ function writeVideoMetaCache(
       ...(meta.channel_name ? { channel_name: meta.channel_name } : {}),
     };
     cache[`id:${id}`] = merged;
+    if (urlKey) {
+      cache[`url:${urlKey}`] = merged;
+    }
     if (url) {
       cache[`url:${url.trim()}`] = merged;
     }
@@ -141,6 +148,10 @@ function mergeCachedVideoDuration(
     if (item.video_duration || item.channel_name) {
       byId.set(item.id, item);
       byUrl.set(item.url.trim(), item);
+      const itemUrlKey = normalizeLinkUrlKey(item.url);
+      if (itemUrlKey) {
+        byUrl.set(itemUrlKey, item);
+      }
     }
   }
 
@@ -152,9 +163,15 @@ function mergeCachedVideoDuration(
         channel_name: link.channel_name ?? undefined,
       });
     }
-    const memMatch = byId.get(link.id) || byUrl.get(link.url.trim());
+    const linkUrlKey = normalizeLinkUrlKey(link.url);
+    const memMatch =
+      byId.get(link.id) ||
+      (linkUrlKey ? byUrl.get(linkUrlKey) : undefined) ||
+      byUrl.get(link.url.trim());
     const storageMatch =
-      cache[`id:${link.id}`] || cache[`url:${link.url.trim()}`];
+      cache[`id:${link.id}`] ||
+      (linkUrlKey ? cache[`url:${linkUrlKey}`] : undefined) ||
+      cache[`url:${link.url.trim()}`];
 
     const resolvedDuration =
       link.video_duration ||
@@ -286,7 +303,6 @@ interface LinkStoreState {
   links: LinkItem[];
   folders: Folder[];
   activeFolderId: string | null;
-  activeTag: string | null;
   cardDensity: 'rich' | 'compact';
   newlyCreatedGroupId: string | null;
   isImportingGroup: boolean;
@@ -299,7 +315,6 @@ interface LinkStoreState {
   fetchInitialData: () => Promise<void>;
   syncAuthUser: (user: AuthUserSummary | null) => Promise<void>;
   setActiveFolderId: (folderId: string | null) => void;
-  setActiveTag: (tag: string | null) => void;
   setCardDensity: (density: 'rich' | 'compact') => void;
   clearNewlyCreatedGroupId: () => void;
   clearError: () => void;
@@ -363,7 +378,6 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   links: [],
   folders: [],
   activeFolderId: null,
-  activeTag: null,
   cardDensity: 'rich',
   newlyCreatedGroupId: null,
   isImportingGroup: false,
@@ -514,7 +528,6 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
   },
 
   setActiveFolderId: (folderId) => set({ activeFolderId: folderId }),
-  setActiveTag: (tag) => set({ activeTag: tag }),
   setCardDensity: (density) => set({ cardDensity: density }),
   clearNewlyCreatedGroupId: () => set({ newlyCreatedGroupId: null }),
   clearError: () => set({ errorMessage: null }),
@@ -573,13 +586,9 @@ export const useLinkStore = create<LinkStoreState>((set, get) => ({
           void persistConsolidatedState(immediateConsolidated, get().authUser);
         }
 
-        const lowerTitle = (immediateKept.title || '').trim().toLowerCase();
-        const needsMetadataEnrichment =
-          !lowerTitle ||
-          lowerTitle === 'youtube' ||
-          lowerTitle === '- youtube' ||
-          lowerTitle === 'watch - youtube' ||
-          lowerTitle.startsWith('youtube clip (');
+        const needsMetadataEnrichment = isPlaceholderLikeTitle(
+          immediateKept.title
+        );
 
         if (!needsMetadataEnrichment) {
           return immediateKept;

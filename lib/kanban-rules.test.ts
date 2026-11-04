@@ -4,13 +4,11 @@ import {
   clusterGroupLinksBySource,
   consolidateLinksAcrossGroups,
   deduplicateLinks,
-  filterLinks,
   findDuplicateLinkByUrl,
   findExistingGroupForLinkSource,
+  getDescendantFolderIds,
   moveAndReorderGroupLinks,
-  moveAndReorderLinks,
   sortGroupLinks,
-  sortLaneLinks,
 } from './kanban-rules';
 import { Folder, LinkItem, LinkStatus } from './types';
 import {
@@ -78,44 +76,6 @@ function makeFixtureLinks(): LinkItem[] {
   ];
 }
 
-test('reorders items within the same lane and keeps contiguous order_index values', () => {
-  const initial = makeFixtureLinks();
-  // Move link-3 to the top (index 0) of UNREAD lane
-  const updated = moveAndReorderLinks(initial, 'link-3', LinkStatus.UNREAD, 0);
-  const unread = sortLaneLinks(updated, LinkStatus.UNREAD);
-
-  assert.deepEqual(
-    unread.map((l) => ({ id: l.id, order_index: l.order_index })),
-    [
-      { id: 'link-3', order_index: 0 },
-      { id: 'link-1', order_index: 1 },
-      { id: 'link-2', order_index: 2 },
-    ]
-  );
-});
-
-test('moves a card to an empty lane with order_index 0 and re-indexes source lane', () => {
-  const initial = makeFixtureLinks();
-  // ARCHIVED lane is initially empty
-  const updated = moveAndReorderLinks(initial, 'link-2', LinkStatus.ARCHIVED, 0);
-
-  const unread = sortLaneLinks(updated, LinkStatus.UNREAD);
-  const archived = sortLaneLinks(updated, LinkStatus.ARCHIVED);
-
-  assert.equal(archived.length, 1);
-  assert.equal(archived[0].id, 'link-2');
-  assert.equal(archived[0].status, LinkStatus.ARCHIVED);
-  assert.equal(archived[0].order_index, 0);
-
-  assert.deepEqual(
-    unread.map((l) => ({ id: l.id, order_index: l.order_index })),
-    [
-      { id: 'link-1', order_index: 0 },
-      { id: 'link-3', order_index: 1 },
-    ]
-  );
-});
-
 test('reorders links between different Kanban group lanes and within the same group lane', () => {
   const initial = makeFixtureLinks();
 
@@ -173,29 +133,17 @@ test('reorders links between different Kanban group lanes and within the same gr
   );
 });
 
-test('filters links recursively across nested child folders and tags', () => {
+test('resolves descendant folder IDs recursively across nested child folders', () => {
   const folders: Folder[] = [
     { id: 'f-root', user_id: 'u-1', name: 'Engineering', parent_id: null, order_index: 0 },
     { id: 'f-sub', user_id: 'u-1', name: 'Distributed', parent_id: 'f-root', order_index: 0 },
   ];
-  const links = makeFixtureLinks();
 
-  // Selecting parent folder f-root includes links in f-sub as well
-  const rootFiltered = filterLinks(links, folders, {
-    folderId: 'f-root',
-    tag: null,
-    searchQuery: '',
-  });
-  assert.equal(rootFiltered.length, 3);
+  const rootDescendants = getDescendantFolderIds(folders, 'f-root');
+  assert.deepEqual(Array.from(rootDescendants).sort(), ['f-root', 'f-sub']);
 
-  // Selecting child folder f-sub only returns link-1
-  const subFiltered = filterLinks(links, folders, {
-    folderId: 'f-sub',
-    tag: null,
-    searchQuery: '',
-  });
-  assert.equal(subFiltered.length, 1);
-  assert.equal(subFiltered[0].id, 'link-1');
+  const subDescendants = getDescendantFolderIds(folders, 'f-sub');
+  assert.deepEqual(Array.from(subDescendants), ['f-sub']);
 });
 
 test('sorts sub-groups of same YouTube channel or same domain/link on top of standalone links', () => {

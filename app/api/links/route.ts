@@ -146,15 +146,13 @@ export async function POST(request: NextRequest) {
       typeof body.folder_id === 'string' && body.folder_id.trim()
         ? body.folder_id.trim()
         : null;
-    const tags = Array.isArray(body.tags)
-      ? body.tags
-          .map((t: unknown) => String(t).trim().toLowerCase())
-          .filter(Boolean)
-      : ['reference'];
     const status =
       body.status && Object.values(LinkStatus).includes(body.status)
         ? (body.status as LinkStatus)
         : LinkStatus.UNREAD;
+    const tags = Array.isArray(body.tags)
+      ? body.tags.filter((t: unknown) => typeof t === 'string')
+      : ['saved-tab'];
 
     const preSnapshot = getDatabaseSnapshot(userId);
     const preExistingDuplicate = findDuplicateLinkByUrl(
@@ -191,7 +189,7 @@ export async function POST(request: NextRequest) {
               null,
           },
           userId
-        ) ?? preExistingDuplicate
+        )?.link ?? preExistingDuplicate
       : insertLink({
           user_id: userId,
           url: scraped.url,
@@ -204,7 +202,7 @@ export async function POST(request: NextRequest) {
               : scraped.image_url,
           favicon: scraped.favicon,
           folder_id: folderId,
-          tags: tags.length > 0 ? tags : ['reference'],
+          tags,
           reading_minutes: scraped.reading_minutes,
           video_duration: scraped.video_duration ?? null,
           channel_name: scraped.channel_name ?? null,

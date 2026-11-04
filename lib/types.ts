@@ -1,3 +1,5 @@
+export type ThemeMode = 'dark' | 'light';
+
 export enum LinkStatus {
   UNREAD = 'UNREAD',
   READING = 'READING',

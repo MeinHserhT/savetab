@@ -4,8 +4,7 @@
   "project": {
     "name": "TabFlow — Visual Link & Knowledge Manager",
     "framework": "Next.js 15 App Router (TypeScript)",
-    "database": "Firebase Firestore (User-Scoped Subcollections) + Local JSON Fallback",
-    "aiSdk": "@google/genai (gemini-3.5-flash)"
+    "database": "Firebase Firestore (User-Scoped Subcollections) + Local JSON Fallback"
   },
   "nodes": [
     {
@@ -13,7 +12,7 @@
       "kind": "entrypoint",
       "layer": "presentation",
       "exports": ["RootLayout", "metadata"],
-      "imports": ["app/globals.css"],
+      "imports": ["app/globals.css", "components/ThemeBootstrap.tsx", "components/FirebaseErrorBoundary.tsx"],
       "description": "Root Next.js App Router layout with typography, SEO metadata, and theme hydration."
     },
     {
@@ -21,16 +20,19 @@
       "kind": "entrypoint",
       "layer": "presentation",
       "exports": ["HomePage"],
-      "imports": ["components/WorkspaceShell.tsx"],
-      "description": "Primary workspace route rendering WorkspaceShell."
-    },
-    {
-      "id": "app/shared/group/page.tsx",
-      "kind": "entrypoint",
-      "layer": "presentation",
-      "exports": ["SharedGroupPage"],
-      "imports": ["lib/share-group.ts", "store/useLinkStore.ts"],
-      "description": "Import/preview route for shared TabFlow group links."
+      "imports": [
+        "components/Sidebar.tsx",
+        "components/KanbanBoard.tsx",
+        "components/AddLinkModal.tsx",
+        "components/ChromeTabGroupImportModal.tsx",
+        "components/AuthControl.tsx",
+        "components/ThemeSelector.tsx",
+        "components/LanguageSelector.tsx",
+        "components/WorkspaceDndProvider.tsx",
+        "store/useLinkStore.ts",
+        "store/useLanguageStore.ts"
+      ],
+      "description": "Primary workspace route coordinating Sidebar, KanbanBoard, modals, and header controls."
     },
     {
       "id": "app/api/links/route.ts",
@@ -94,31 +96,13 @@
       "layer": "server",
       "exports": ["POST"],
       "imports": ["lib/cjk-translate-server.ts"],
-      "description": "Server-side CJK (Chinese/Japanese/Korean) tab title translation endpoint using gemini-3.5-flash."
-    },
-    {
-      "id": "components/WorkspaceShell.tsx",
-      "kind": "component",
-      "layer": "presentation",
-      "exports": ["WorkspaceShell"],
-      "imports": [
-        "components/Sidebar.tsx",
-        "components/KanbanBoard.tsx",
-        "components/AddLinkModal.tsx",
-        "components/CommandPalette.tsx",
-        "components/WorkspaceDndProvider.tsx",
-        "components/FirebaseErrorBoundary.tsx",
-        "store/useLinkStore.ts",
-        "store/useThemeStore.ts",
-        "store/useLanguageStore.ts"
-      ],
-      "description": "Top-level interactive shell coordinating Sidebar, KanbanBoard, modals, and keyboard shortcuts."
+      "description": "Server-side CJK (Chinese/Japanese/Korean) tab title translation endpoint."
     },
     {
       "id": "components/KanbanBoard.tsx",
       "kind": "component",
       "layer": "presentation",
-      "exports": ["KanbanBoard"],
+      "exports": ["KanbanBoard", "getTabGroupStyles", "COLOR_KEYS", "TAB_GROUP_STYLES"],
       "imports": [
         "store/useLinkStore.ts",
         "store/useThemeStore.ts",
@@ -127,7 +111,8 @@
         "components/EmptyLaneState.tsx",
         "lib/kanban-rules.ts",
         "lib/tab-group-drop.ts",
-        "lib/cjk-translate.ts"
+        "lib/cjk-translate.ts",
+        "lib/types.ts"
       ],
       "description": "Multi-column Tab Group board with sub-group clustering, chrome-tab-hover-card website preview, drag-and-drop, and auto-scroll/focus/highlight on newly added tabs."
     },
@@ -140,18 +125,19 @@
         "store/useLinkStore.ts",
         "store/useThemeStore.ts",
         "store/useLanguageStore.ts",
-        "components/AuthAccountControl.tsx",
+        "components/WorkspaceDndProvider.tsx",
+        "components/KanbanBoard.tsx",
         "lib/tab-group-drop.ts",
-        "lib/share-group.ts"
+        "lib/types.ts"
       ],
-      "description": "Collapsible navigation rail with nested Tab Group tree, 24-color picker, tag filters, and group sharing."
+      "description": "Collapsible navigation rail with nested Tab Group tree and 24-color picker."
     },
     {
       "id": "components/WorkspaceDndProvider.tsx",
       "kind": "component",
       "layer": "presentation",
       "exports": ["WorkspaceDndProvider", "useWorkspaceDnd"],
-      "imports": ["store/useLinkStore.ts", "lib/kanban-rules.ts"],
+      "imports": ["store/useLinkStore.ts", "store/useLanguageStore.ts", "lib/tab-group-drop.ts", "lib/types.ts"],
       "description": "Unified @dnd-kit drag-and-drop context supporting cross-column card sorting and sidebar drop targets."
     },
     {
@@ -160,23 +146,31 @@
       "layer": "presentation",
       "exports": ["AddLinkModal"],
       "imports": ["store/useLinkStore.ts", "store/useLanguageStore.ts", "lib/types.ts"],
-      "description": "Modal dialog for adding a URL with live metadata preview, group selection, and tag assignment."
+      "description": "Modal dialog for adding a URL with drag-and-drop and instant group assignment."
     },
     {
-      "id": "components/CommandPalette.tsx",
+      "id": "components/ChromeTabGroupImportModal.tsx",
       "kind": "component",
       "layer": "presentation",
-      "exports": ["CommandPalette"],
-      "imports": ["store/useLinkStore.ts", "store/useLanguageStore.ts", "lib/kanban-rules.ts"],
-      "description": "Cmd/Ctrl+K search and quick-jump palette across all saved tabs and Tab Groups."
+      "exports": ["ChromeTabGroupImportModal"],
+      "imports": [
+        "store/useLinkStore.ts",
+        "store/useThemeStore.ts",
+        "store/useLanguageStore.ts",
+        "components/KanbanBoard.tsx",
+        "lib/tab-group-drop.ts",
+        "lib/kanban-rules.ts",
+        "lib/types.ts"
+      ],
+      "description": "Modal dialog for batch-importing Chrome Tab Groups or Bookmark folders."
     },
     {
-      "id": "components/AuthAccountControl.tsx",
+      "id": "components/AuthControl.tsx",
       "kind": "component",
       "layer": "presentation",
-      "exports": ["AuthAccountControl"],
+      "exports": ["AuthControl"],
       "imports": ["lib/firebase.ts", "store/useLinkStore.ts", "store/useLanguageStore.ts"],
-      "description": "Firebase Google Authentication control managing sign-in, sign-out, and cloud sync status."
+      "description": "Firebase Google/Email/Guest Authentication control managing sign-in, sign-out, and cloud sync status."
     },
     {
       "id": "store/useLinkStore.ts",
@@ -191,7 +185,7 @@
       "kind": "store",
       "layer": "state",
       "exports": ["useThemeStore"],
-      "imports": ["lib/theme.ts"],
+      "imports": ["lib/types.ts"],
       "description": "Zustand store managing dark/light theme persistence."
     },
     {
@@ -207,10 +201,9 @@
       "kind": "domain-module",
       "layer": "domain",
       "exports": [
-        "sortLaneLinks",
-        "moveAndReorderLinks",
+        "decodeHtmlEntities",
+        "isPlaceholderLikeTitle",
         "getDescendantFolderIds",
-        "filterLinks",
         "isLegacyMockLink",
         "isLegacySeedFolder",
         "isYouTubeLink",
@@ -228,7 +221,7 @@
         "clusterGroupLinksBySource"
       ],
       "imports": ["lib/types.ts"],
-      "description": "Pure deterministic domain engine for URL canonicalization, deduplication, YouTube/domain sub-group clustering, and drag-and-drop lane ordering."
+      "description": "Pure deterministic domain engine for HTML entity decoding, URL canonicalization, deduplication, YouTube/domain sub-group clustering, and drag-and-drop lane ordering."
     },
     {
       "id": "lib/firebase.ts",
@@ -290,8 +283,8 @@
       "kind": "domain-module",
       "layer": "server",
       "exports": ["translateCJKTitleIfNeeded", "translateCJKTitlesBatch"],
-      "imports": ["@google/genai", "lib/cjk-translate.ts"],
-      "description": "Server-side CJK title translation service powered by gemini-3.5-flash with LRU memory cache and Google GTX fallback."
+      "imports": ["lib/cjk-translate.ts"],
+      "description": "Server-side CJK title translation service with LRU memory cache and Google GTX endpoint."
     },
     {
       "id": "lib/tab-group-drop.ts",

@@ -1,4 +1,3 @@
-import { GoogleGenAI, Type } from '@google/genai';
 import {
   containsCJK,
   normalizeCJKDialectPhrases,
@@ -16,21 +15,6 @@ function setCachedTranslation(original: string, translated: string): void {
     }
   }
   translationMemoryCache.set(original, translated);
-}
-
-function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    return null;
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 }
 
 async function translateViaGoogleGtxFallback(
@@ -74,9 +58,7 @@ async function translateViaGoogleGtxFallback(
 }
 
 /**
- * Translates a single tab title if it contains Chinese (Mandarin, Cantonese,
- * Hokkien, Hakka, Simplified/Traditional), Korean (standard or dialect), or
- * Japanese (standard or dialect) into clear, natural English.
+ * Translates a single tab title if it contains Chinese, Korean, or Japanese into English.
  */
 export async function translateCJKTitleIfNeeded(
   rawTitle: string | null | undefined
@@ -94,41 +76,7 @@ export async function translateCJKTitleIfNeeded(
     return cached;
   }
 
-  const ai = getGeminiClient();
-  if (ai) {
-    try {
-      const response = await Promise.race([
-        ai.models.generateContent({
-          model: 'gemini-3.5-flash',
-          contents: `Translate any Chinese (including Mandarin, Cantonese, Hokkien, Hakka, Traditional, or Simplified dialects), Korean (including regional dialects and slang), or Japanese (including Kansai and regional dialects) text in the following browser tab title into natural, concise English. Keep existing English or Vietnamese words, numbers, brackets, and brand/channel names intact. Return ONLY the translated title text without quotes or explanations.\n\nTab Title: ${trimmed}`,
-          config: {
-            temperature: 0.1,
-          },
-        }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
-      ]);
-
-      const candidate = response?.text?.trim();
-      if (candidate && !containsCJK(candidate)) {
-        const sanitized = sanitizeTranslatedTitle(candidate, trimmed);
-        setCachedTranslation(trimmed, sanitized);
-        return sanitized;
-      }
-      if (candidate) {
-        const fallbackRefined = await translateViaGoogleGtxFallback(candidate, 2000);
-        const finalTitle = sanitizeTranslatedTitle(
-          fallbackRefined || candidate,
-          trimmed
-        );
-        setCachedTranslation(trimmed, finalTitle);
-        return finalTitle;
-      }
-    } catch {
-      // Fall through to Google Translate gtx fallback
-    }
-  }
-
-  const fallback = await translateViaGoogleGtxFallback(trimmed, 2000);
+  const fallback = await translateViaGoogleGtxFallback(trimmed, 2500);
   if (fallback) {
     setCachedTranslation(trimmed, fallback);
     return fallback;
@@ -139,7 +87,6 @@ export async function translateCJKTitleIfNeeded(
 
 /**
  * Batch-translates multiple tab titles containing CJK characters/dialects.
- * Returns a map from original title -> translated title.
  */
 export async function translateCJKTitlesBatch(
   titles: string[]
@@ -174,66 +121,6 @@ export async function translateCJKTitlesBatch(
     return result;
   }
 
-  if (uniqueToTranslate.length === 1) {
-    const single = uniqueToTranslate[0];
-    const translated = await translateCJKTitleIfNeeded(single);
-    for (const raw of titles) {
-      if (typeof raw === 'string' && raw.trim() === single) {
-        result[raw] = translated;
-      }
-    }
-    return result;
-  }
-
-  const ai = getGeminiClient();
-  if (ai) {
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: `Translate any Chinese (Mandarin, Cantonese, Hokkien, Hakka, Traditional, Simplified), Korean (standard and regional dialects), or Japanese (standard and regional dialects) text in each of the following browser tab titles into natural, concise English. Preserve non-CJK words (like English or Vietnamese), numbers, and brand names. Return a JSON array of objects with "source" and "translated" properties matching the input order.\n\nInput titles:\n${JSON.stringify(
-          uniqueToTranslate
-        )}`,
-        config: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                source: { type: Type.STRING },
-                translated: { type: Type.STRING },
-              },
-              required: ['source', 'translated'],
-            },
-          },
-        },
-      });
-
-      const rawJson = response.text?.trim();
-      if (rawJson) {
-        const parsed = JSON.parse(rawJson) as Array<{
-          source?: string;
-          translated?: string;
-        }>;
-        if (Array.isArray(parsed)) {
-          for (let i = 0; i < uniqueToTranslate.length; i++) {
-            const src = uniqueToTranslate[i];
-            const matched =
-              parsed.find((item) => item?.source?.trim() === src) ?? parsed[i];
-            if (matched?.translated) {
-              const clean = sanitizeTranslatedTitle(matched.translated, src);
-              setCachedTranslation(src, clean);
-            }
-          }
-        }
-      }
-    } catch {
-      // Fall through to per-item fallback for any untranslated items
-    }
-  }
-
-  // Ensure any remaining items not resolved by batch Gemini call use the fallback
   await Promise.all(
     uniqueToTranslate.map(async (src) => {
       if (!translationMemoryCache.has(src)) {

@@ -47,7 +47,6 @@ export function AuthControl() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,7 +87,6 @@ export function AuthControl() {
   const resetForm = (nextMode: AuthMode = 'login') => {
     setAuthMode(nextMode);
     setAuthError(null);
-    setAuthNotice(null);
     setPassword('');
     setConfirmPassword('');
   };
@@ -101,7 +99,6 @@ export function AuthControl() {
   const handleGoogleSignIn = async () => {
     setIsSubmitting(true);
     setAuthError(null);
-    setAuthNotice(null);
     try {
       await signInWithPopup(auth, googleProvider);
       setIsModalOpen(false);
@@ -127,7 +124,6 @@ export function AuthControl() {
   const handleGuestSignIn = async () => {
     setIsSubmitting(true);
     setAuthError(null);
-    setAuthNotice(null);
     try {
       const cred = await signInAnonymously(auth);
       if (!cred.user.displayName) {
@@ -172,7 +168,6 @@ export function AuthControl() {
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
-    setAuthNotice(null);
 
     const trimmedEmail = email.trim();
     const trimmedName = displayName.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
@@ -606,13 +601,6 @@ export function AuthControl() {
                   <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-500 text-[11px] flex items-start gap-2 leading-relaxed">
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>{authError}</span>
-                  </div>
-                )}
-
-                {authNotice && (
-                  <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 text-[11px] flex items-start gap-2 leading-relaxed">
-                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{authNotice}</span>
                   </div>
                 )}
 
