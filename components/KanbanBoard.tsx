@@ -12,8 +12,6 @@ import {
   Globe,
   GripVertical,
   Image as ImageIcon,
-  LayoutGrid,
-  List,
   MoreVertical,
   Play,
   Plus,
@@ -600,7 +598,6 @@ function BottomNavFolderButton({
 function TabLinkRow({
   link,
   groupId,
-  cardDensity = 'rich',
   isDragging,
   isHighlighted,
   dropPosition,
@@ -613,7 +610,6 @@ function TabLinkRow({
 }: {
   link: LinkItem;
   groupId: string;
-  cardDensity?: 'rich' | 'compact';
   isDragging: boolean;
   isHighlighted?: boolean;
   dropPosition: 'before' | 'after' | null;
@@ -976,11 +972,7 @@ function TabLinkRow({
               </span>
 
               <div className="min-w-0 flex-1">
-                <h3
-                  className={`text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug ${
-                    cardDensity === 'rich' ? 'line-clamp-2' : 'truncate'
-                  }`}
-                >
+                <h3 className="text-[11px] font-medium text-[var(--tf-text)] group-hover:text-[var(--tf-accent-text)] transition-colors leading-snug line-clamp-2">
                   {link.title}
                 </h3>
               </div>
@@ -1126,7 +1118,6 @@ function TabLinkRow({
 function TabSubGroupBlock({
   subGroup,
   groupId,
-  cardDensity,
   draggedLinkId,
   highlightedLinkId,
   linkDropTarget,
@@ -1139,7 +1130,6 @@ function TabSubGroupBlock({
 }: {
   subGroup: TabSubGroup;
   groupId: string;
-  cardDensity: 'rich' | 'compact';
   draggedLinkId: string | null;
   highlightedLinkId?: string | null;
   linkDropTarget: {
@@ -1236,7 +1226,6 @@ function TabSubGroupBlock({
             key={link.id}
             link={link}
             groupId={groupId}
-            cardDensity={cardDensity}
             isDragging={draggedLinkId === link.id}
             isHighlighted={highlightedLinkId === link.id}
             dropPosition={
@@ -1267,7 +1256,6 @@ export function KanbanBoard({
     links,
     folders,
     activeFolderId,
-    cardDensity,
     newlyCreatedGroupId,
     isImportingGroup,
     isLoading,
@@ -1275,7 +1263,6 @@ export function KanbanBoard({
     workspaceNotice,
     highlightedLinkId,
     setActiveFolderId,
-    setCardDensity,
     clearNewlyCreatedGroupId,
     clearError,
     clearNotice,
@@ -2038,43 +2025,12 @@ export function KanbanBoard({
         </div>
       )}
 
-      {/* Swiss Minimalist Board Sub-Toolbar: Group/Tab Counter & Rich/Compact Card Density Switch */}
+      {/* Swiss Minimalist Board Sub-Toolbar: Group/Tab Counter */}
       <div className="px-3 sm:px-4 lg:px-6 pt-2.5 pb-1.5 border-b border-[var(--tf-border)] bg-[var(--tf-surface)]/45 flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-[11px] font-mono text-[var(--tf-text-muted)] tabular-nums truncate">
             {visibleGroups.length} · {links.length} {t.sidebar.tabUnit}
           </span>
-        </div>
-
-        <div
-          role="group"
-          aria-label="Card density"
-          className="inline-flex items-center rounded-md border border-[var(--tf-border)] bg-[var(--tf-surface)] p-0.5 shrink-0"
-        >
-          <button
-            type="button"
-            onClick={() => setCardDensity('rich')}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-medium transition-colors ${
-              cardDensity === 'rich'
-                ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
-                : 'text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] border border-transparent'
-            }`}
-          >
-            <LayoutGrid className="w-3 h-3" />
-            <span>{t.board.cardViewRich}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setCardDensity('compact')}
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-medium transition-colors ${
-              cardDensity === 'compact'
-                ? 'bg-[var(--tf-elevated)] text-[var(--tf-text)] border border-[var(--tf-border)]'
-                : 'text-[var(--tf-text-muted)] hover:text-[var(--tf-text)] border border-transparent'
-            }`}
-          >
-            <List className="w-3 h-3" />
-            <span>{t.board.cardViewCompact}</span>
-          </button>
         </div>
       </div>
 
@@ -2511,7 +2467,6 @@ export function KanbanBoard({
                                 key={entry.subGroup.key}
                                 subGroup={entry.subGroup}
                                 groupId={group.id}
-                                cardDensity={cardDensity}
                                 draggedLinkId={draggedLinkId}
                                 highlightedLinkId={highlightedLinkId}
                                 linkDropTarget={linkDropTarget}
@@ -2527,7 +2482,6 @@ export function KanbanBoard({
                                 key={entry.link.id}
                                 link={entry.link}
                                 groupId={group.id}
-                                cardDensity={cardDensity}
                                 isDragging={draggedLinkId === entry.link.id}
                                 isHighlighted={
                                   highlightedLinkId === entry.link.id

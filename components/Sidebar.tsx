@@ -655,10 +655,7 @@ export function Sidebar() {
               </div>
             ) : (
               <div className="px-1.5 pb-1 flex items-center justify-between gap-1 shrink-0 border-b border-[var(--tf-border)]">
-                <span className="text-[10px] font-mono uppercase tracking-[0.08em] text-[var(--tf-text-muted)]">
-                  {t.sidebar.foldersSectionTitle}
-                </span>
-                <div className="flex items-center gap-0.5">
+                <div className="w-full flex items-center justify-between gap-0.5">
                   <button
                     type="button"
                     onClick={() => {
@@ -666,7 +663,7 @@ export function Sidebar() {
                       setIsAddingGroup((prev) => !prev);
                     }}
                     aria-label={t.sidebar.newGroup}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] transition-colors rounded px-1.5 py-0.5 whitespace-nowrap shrink-0"
+                    className="mr-auto inline-flex items-center justify-start gap-1 text-left text-[11px] font-medium text-[var(--tf-text-secondary)] hover:text-[var(--tf-text)] transition-colors rounded px-1.5 py-0.5 whitespace-nowrap shrink-0"
                   >
                     <Plus className="w-3 h-3" />
                     <span>{t.sidebar.newGroup}</span>

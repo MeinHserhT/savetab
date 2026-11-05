@@ -9,7 +9,9 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
+  updatePassword,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signOut,
 } from 'firebase/auth';
 import {
@@ -20,6 +22,10 @@ import {
   X,
   Mail,
   Lock,
+  KeyRound,
+  Copy,
+  Check,
+  ExternalLink,
   Loader2,
   AlertCircle,
   CheckCircle2,
@@ -35,6 +41,9 @@ import { useLanguageStore } from '@/store/useLanguageStore';
 
 type AuthMode = 'login' | 'register';
 
+const FIREBASE_AUTHORIZED_DOMAINS_URL =
+  'https://console.firebase.google.com/project/cotuong-d864b/authentication/settings';
+
 export function AuthControl() {
   const { authUser, isAuthReady, isCloudSynced, syncAuthUser } = useLinkStore();
   const { t } = useLanguageStore();
@@ -47,7 +56,20 @@ export function AuthControl() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState<string | null>(
+    null
+  );
+  const [domainCopied, setDomainCopied] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const [isSetPasswordOpen, setIsSetPasswordOpen] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [menuFeedback, setMenuFeedback] = useState<{
+    type: 'error' | 'success';
+    text: string;
+  } | null>(null);
+  const [isMenuBusy, setIsMenuBusy] = useState(false);
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -87,6 +109,8 @@ export function AuthControl() {
   const resetForm = (nextMode: AuthMode = 'login') => {
     setAuthMode(nextMode);
     setAuthError(null);
+    setAuthSuccess(null);
+    setUnauthorizedDomain(null);
     setPassword('');
     setConfirmPassword('');
   };
@@ -96,9 +120,21 @@ export function AuthControl() {
     setIsModalOpen(true);
   };
 
+  const handleCopyDomain = async (domainToCopy: string) => {
+    try {
+      await navigator.clipboard.writeText(domainToCopy);
+      setDomainCopied(true);
+      setTimeout(() => setDomainCopied(false), 2000);
+    } catch {
+      // Ignore clipboard permission errors
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     setIsSubmitting(true);
     setAuthError(null);
+    setAuthSuccess(null);
+    setUnauthorizedDomain(null);
     try {
       await signInWithPopup(auth, googleProvider);
       setIsModalOpen(false);
@@ -107,7 +143,18 @@ export function AuthControl() {
         typeof err === 'object' && err !== null && 'code' in err
           ? String((err as { code?: string }).code)
           : '';
-      if (code === 'auth/popup-closed-by-user') {
+      const msg = err instanceof Error ? err.message : '';
+      if (
+        code === 'auth/unauthorized-domain' ||
+        msg.includes('auth/unauthorized-domain')
+      ) {
+        const currentDomain =
+          typeof window !== 'undefined' && window.location.hostname
+            ? window.location.hostname
+            : 'your-domain.vercel.app';
+        setUnauthorizedDomain(currentDomain);
+        setAuthError(t.auth.errUnauthorizedDomain(currentDomain));
+      } else if (code === 'auth/popup-closed-by-user') {
         setAuthError(t.auth.errPopupClosed);
       } else if (code === 'auth/popup-blocked') {
         setAuthError(t.auth.errPopupBlocked);
@@ -124,6 +171,8 @@ export function AuthControl() {
   const handleGuestSignIn = async () => {
     setIsSubmitting(true);
     setAuthError(null);
+    setAuthSuccess(null);
+    setUnauthorizedDomain(null);
     try {
       const cred = await signInAnonymously(auth);
       if (!cred.user.displayName) {
@@ -149,7 +198,18 @@ export function AuthControl() {
         typeof err === 'object' && err !== null && 'code' in err
           ? String((err as { code?: string }).code)
           : '';
+      const msg = err instanceof Error ? err.message : '';
       if (
+        code === 'auth/unauthorized-domain' ||
+        msg.includes('auth/unauthorized-domain')
+      ) {
+        const currentDomain =
+          typeof window !== 'undefined' && window.location.hostname
+            ? window.location.hostname
+            : 'your-domain.vercel.app';
+        setUnauthorizedDomain(currentDomain);
+        setAuthError(t.auth.errUnauthorizedDomain(currentDomain));
+      } else if (
         code === 'auth/operation-not-allowed' ||
         code === 'auth/admin-restricted-operation'
       ) {
@@ -165,9 +225,105 @@ export function AuthControl() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setAuthError(t.auth.errResetMissingEmail);
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmedEmail);
+      setAuthSuccess(t.auth.resetEmailSent(trimmedEmail));
+    } catch (err: unknown) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === 'auth/invalid-email') {
+        setAuthError(t.auth.errInvalidEmail);
+      } else {
+        setAuthError(
+          err instanceof Error ? err.message : t.auth.errGenericAuth
+        );
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDirectPasswordSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMenuFeedback(null);
+
+    if (newPasswordInput.length < 6) {
+      setMenuFeedback({ type: 'error', text: t.auth.errShortPassword });
+      return;
+    }
+
+    if (!auth.currentUser) return;
+
+    setIsMenuBusy(true);
+    try {
+      await updatePassword(auth.currentUser, newPasswordInput);
+      setNewPasswordInput('');
+      setMenuFeedback({
+        type: 'success',
+        text: t.auth.passwordUpdatedSuccess,
+      });
+    } catch (err: unknown) {
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err
+          ? String((err as { code?: string }).code)
+          : '';
+      if (code === 'auth/requires-recent-login') {
+        setMenuFeedback({
+          type: 'error',
+          text: t.auth.errRequiresRecentLogin,
+        });
+      } else if (code === 'auth/operation-not-allowed') {
+        setMenuFeedback({
+          type: 'error',
+          text: t.auth.errOperationNotAllowed,
+        });
+      } else {
+        setMenuFeedback({
+          type: 'error',
+          text: err instanceof Error ? err.message : t.auth.errGenericAuth,
+        });
+      }
+    } finally {
+      setIsMenuBusy(false);
+    }
+  };
+
+  const handleSendResetLinkForCurrentUser = async () => {
+    if (!authUser?.email) return;
+    setMenuFeedback(null);
+    setIsMenuBusy(true);
+    try {
+      await sendPasswordResetEmail(auth, authUser.email);
+      setMenuFeedback({
+        type: 'success',
+        text: t.auth.resetEmailSent(authUser.email),
+      });
+    } catch (err: unknown) {
+      setMenuFeedback({
+        type: 'error',
+        text: err instanceof Error ? err.message : t.auth.errGenericAuth,
+      });
+    } finally {
+      setIsMenuBusy(false);
+    }
+  };
+
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
+    setAuthSuccess(null);
 
     const trimmedEmail = email.trim();
     const trimmedName = displayName.trim().slice(0, MAX_DISPLAY_NAME_LENGTH);
@@ -249,6 +405,8 @@ export function AuthControl() {
 
   const handleSignOut = async () => {
     setIsMenuOpen(false);
+    setIsSetPasswordOpen(false);
+    setMenuFeedback(null);
     try {
       await signOut(auth);
     } catch (err) {
@@ -273,7 +431,10 @@ export function AuthControl() {
           <div className="relative" ref={menuRef}>
             <button
               type="button"
-              onClick={() => setIsMenuOpen((prev) => !prev)}
+              onClick={() => {
+                setIsMenuOpen((prev) => !prev);
+                setMenuFeedback(null);
+              }}
               className="h-8 pl-2 pr-2.5 rounded-md border border-[var(--tf-border)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] text-[var(--tf-text)] flex items-center gap-2 text-xs font-medium transition-colors"
               title={t.auth.accountSyncTitle}
             >
@@ -307,7 +468,7 @@ export function AuthControl() {
             </button>
 
             {isMenuOpen && (
-              <div className="absolute right-0 mt-1.5 w-64 rounded-lg border border-[var(--tf-border)] bg-[var(--tf-surface)] shadow-xl p-3 z-50 space-y-2.5">
+              <div className="absolute right-0 mt-1.5 w-72 rounded-lg border border-[var(--tf-border)] bg-[var(--tf-surface)] shadow-xl p-3 z-50 space-y-2.5">
                 <div className="flex items-start gap-2.5 pb-2.5 border-b border-[var(--tf-border)]">
                   {authUser.photoURL ? (
                     <img
@@ -346,6 +507,75 @@ export function AuthControl() {
                     </div>
                   </div>
                 </div>
+
+                {!authUser.isAnonymous && authUser.email && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSetPasswordOpen((prev) => !prev);
+                        setMenuFeedback(null);
+                      }}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--tf-text)] bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] border border-[var(--tf-border)] transition-colors"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>{t.auth.setPasswordMenuBtn}</span>
+                    </button>
+
+                    {isSetPasswordOpen && (
+                      <form
+                        onSubmit={handleDirectPasswordSave}
+                        className="p-2.5 rounded-md bg-[var(--tf-canvas)] border border-[var(--tf-border)] space-y-2"
+                      >
+                        <p className="text-[11px] font-medium text-[var(--tf-text-secondary)]">
+                          {t.auth.setPasswordTitle}
+                        </p>
+                        <input
+                          type="password"
+                          value={newPasswordInput}
+                          onChange={(e) => setNewPasswordInput(e.target.value)}
+                          placeholder={t.auth.newPasswordPlaceholder}
+                          className="w-full px-2.5 py-1.5 text-xs rounded border border-[var(--tf-border)] bg-[var(--tf-surface)] text-[var(--tf-text)] placeholder:text-[var(--tf-text-muted)] focus:outline-none focus:border-[var(--tf-accent)]"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isMenuBusy}
+                          className="w-full py-1.5 px-3 rounded bg-[var(--tf-text)] hover:opacity-90 text-[var(--tf-canvas)] text-xs font-semibold flex items-center justify-center gap-1.5 transition-opacity disabled:opacity-50"
+                        >
+                          {isMenuBusy && (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          )}
+                          <span>{t.auth.savePasswordBtn}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSendResetLinkForCurrentUser}
+                          disabled={isMenuBusy}
+                          className="w-full py-1 px-2 text-[11px] font-medium text-[var(--tf-accent)] hover:underline text-center disabled:opacity-50"
+                        >
+                          {t.auth.sendResetLinkInsteadBtn}
+                        </button>
+                      </form>
+                    )}
+
+                    {menuFeedback && (
+                      <div
+                        className={`p-2 rounded-md border text-[11px] flex items-start gap-1.5 leading-relaxed ${
+                          menuFeedback.type === 'success'
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500'
+                            : 'bg-rose-500/10 border-rose-500/30 text-rose-500'
+                        }`}
+                      >
+                        {menuFeedback.type === 'success' ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        )}
+                        <span>{menuFeedback.text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {authUser.isAnonymous && (
                   <button
@@ -556,12 +786,22 @@ export function AuthControl() {
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="auth-password"
-                    className="block text-[11px] font-medium text-[var(--tf-text-secondary)] mb-1"
-                  >
-                    {t.auth.passwordLabel}
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      htmlFor="auth-password"
+                      className="block text-[11px] font-medium text-[var(--tf-text-secondary)]"
+                    >
+                      {t.auth.passwordLabel}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleForgotPassword}
+                      disabled={isSubmitting}
+                      className="text-[11px] font-medium text-[var(--tf-accent)] hover:underline disabled:opacity-50"
+                    >
+                      {t.auth.forgotPasswordBtn}
+                    </button>
+                  </div>
                   <div className="relative">
                     <Lock className="w-3.5 h-3.5 text-[var(--tf-text-muted)] absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
@@ -598,9 +838,53 @@ export function AuthControl() {
                 )}
 
                 {authError && (
-                  <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-500 text-[11px] flex items-start gap-2 leading-relaxed">
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{authError}</span>
+                  <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-500 text-[11px] space-y-2 leading-relaxed">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span>{authError}</span>
+                    </div>
+                    {unauthorizedDomain && (
+                      <div className="pt-1.5 border-t border-rose-500/20 space-y-2">
+                        <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[var(--tf-canvas)] border border-[var(--tf-border)] text-[var(--tf-text)] font-mono text-[11px]">
+                          <span className="truncate">{unauthorizedDomain}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyDomain(unauthorizedDomain)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--tf-card)] hover:bg-[var(--tf-card-hover)] border border-[var(--tf-border)] text-[10px] font-sans font-semibold shrink-0 transition-colors"
+                          >
+                            {domainCopied ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-500" />
+                                <span className="text-emerald-500">
+                                  {t.auth.domainCopiedBtn}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>{t.auth.copyDomainBtn}</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <a
+                          href={FIREBASE_AUTHORIZED_DOMAINS_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-1.5 px-2.5 rounded bg-rose-500 text-white hover:opacity-90 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-opacity"
+                        >
+                          <span>{t.auth.openFirebaseDomainsLink}</span>
+                          <ExternalLink className="w-3 h-3 shrink-0" />
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {authSuccess && (
+                  <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 text-[11px] flex items-start gap-2 leading-relaxed">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{authSuccess}</span>
                   </div>
                 )}
 

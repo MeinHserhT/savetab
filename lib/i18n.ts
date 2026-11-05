@@ -178,6 +178,20 @@ export interface Translations {
     errEmailInUse: string;
     errInvalidEmail: string;
     errGenericAuth: string;
+    forgotPasswordBtn: string;
+    errResetMissingEmail: string;
+    resetEmailSent: (email: string) => string;
+    setPasswordMenuBtn: string;
+    setPasswordTitle: string;
+    newPasswordPlaceholder: string;
+    savePasswordBtn: string;
+    sendResetLinkInsteadBtn: string;
+    passwordUpdatedSuccess: string;
+    errRequiresRecentLogin: string;
+    errUnauthorizedDomain: (domain: string) => string;
+    copyDomainBtn: string;
+    domainCopiedBtn: string;
+    openFirebaseDomainsLink: string;
   };
 }
 
@@ -396,11 +410,31 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       errPasswordMismatch: 'Mật khẩu xác nhận không khớp.',
       errOperationNotAllowed:
         'Phương thức Email/Mật khẩu chưa được bật trong Firebase Console. Bạn có thể bấm "Tiếp tục với tài khoản Google" ở trên để đăng nhập ngay, hoặc bật Email/Password trong Firebase Console (Authentication → Sign-in method → Email/Password).',
-      errInvalidCredential: 'Email hoặc mật khẩu không chính xác.',
+      errInvalidCredential:
+        'Email hoặc mật khẩu không chính xác. (Nếu bạn từng đăng nhập bằng Google, hãy bấm "Quên / Đặt mật khẩu?" để tạo mật khẩu cho email này).',
       errEmailInUse:
-        'Email này đã được đăng ký. Vui lòng chuyển sang tab Đăng nhập.',
+        'Email này đã tồn tại (hoặc đã đăng nhập bằng Google). Hãy chuyển sang tab Đăng nhập hoặc bấm "Quên / Đặt mật khẩu?" để đặt mật khẩu.',
       errInvalidEmail: 'Địa chỉ email không hợp lệ.',
       errGenericAuth: 'Đã xảy ra lỗi khi xác thực. Vui lòng thử lại.',
+      forgotPasswordBtn: 'Quên / Đặt mật khẩu?',
+      errResetMissingEmail:
+        'Vui lòng nhập địa chỉ Email ở ô trên trước khi bấm nhận link đặt mật khẩu.',
+      resetEmailSent: (targetEmail) =>
+        `Đã gửi link đặt mật khẩu tới ${targetEmail}. Vui lòng kiểm tra hộp thư (và mục Spam) để thiết lập mật khẩu đăng nhập bằng Email.`,
+      setPasswordMenuBtn: 'Đặt / Đổi mật khẩu Email',
+      setPasswordTitle: 'Thiết lập mật khẩu cho Email này',
+      newPasswordPlaceholder: 'Mật khẩu mới (ít nhất 6 ký tự)',
+      savePasswordBtn: 'Lưu mật khẩu',
+      sendResetLinkInsteadBtn: 'Gửi link đặt mật khẩu qua Email',
+      passwordUpdatedSuccess:
+        'Đã lưu mật khẩu thành công! Từ giờ bạn có thể đăng nhập bằng cả Google hoặc Email & mật khẩu này.',
+      errRequiresRecentLogin:
+        'Phiên đăng nhập đã lâu. Vui lòng bấm "Gửi link đặt mật khẩu qua Email" bên dưới hoặc đăng nhập lại bằng Google để đổi mật khẩu trực tiếp.',
+      errUnauthorizedDomain: (domain) =>
+        `Tên miền "${domain}" chưa được thêm vào danh sách Authorized domains trong Firebase Authentication. Hãy sao chép tên miền bên dưới và thêm vào Firebase Console:`,
+      copyDomainBtn: 'Sao chép tên miền',
+      domainCopiedBtn: 'Đã sao chép!',
+      openFirebaseDomainsLink: 'Mở Firebase Authorized Domains →',
     },
   },
   en: {
@@ -618,11 +652,31 @@ export const TRANSLATIONS: Record<LanguageCode, Translations> = {
       errPasswordMismatch: 'Confirmation password does not match.',
       errOperationNotAllowed:
         'Email/Password sign-in is not enabled in Firebase Console yet. Click "Continue with Google" above to sign in right away, or enable Email/Password in Firebase Console (Authentication → Sign-in method → Email/Password).',
-      errInvalidCredential: 'Incorrect email or password.',
+      errInvalidCredential:
+        'Incorrect email or password. (If you previously signed in with Google, click "Forgot / Set password?" to create a password for this email).',
       errEmailInUse:
-        'This email is already registered. Please switch to the Sign In tab.',
+        'This email is already registered (or signed in via Google). Switch to Sign In or click "Forgot / Set password?" to set a password.',
       errInvalidEmail: 'Invalid email address.',
       errGenericAuth: 'Authentication failed. Please try again.',
+      forgotPasswordBtn: 'Forgot / Set password?',
+      errResetMissingEmail:
+        'Please enter your Email address above before requesting a password setup link.',
+      resetEmailSent: (targetEmail) =>
+        `Password setup link sent to ${targetEmail}. Check your inbox (and Spam folder) to set a password for Email login.`,
+      setPasswordMenuBtn: 'Set / Change Email Password',
+      setPasswordTitle: 'Set a password for this Email',
+      newPasswordPlaceholder: 'New password (at least 6 chars)',
+      savePasswordBtn: 'Save password',
+      sendResetLinkInsteadBtn: 'Send password setup link via Email',
+      passwordUpdatedSuccess:
+        'Password saved! You can now sign in using either Google or your Email & this password.',
+      errRequiresRecentLogin:
+        'Session is too old for direct change. Click "Send password setup link via Email" below or sign in with Google again.',
+      errUnauthorizedDomain: (domain) =>
+        `The domain "${domain}" is not in Firebase Authorized domains yet. Copy the domain below and add it in Firebase Console:`,
+      copyDomainBtn: 'Copy domain',
+      domainCopiedBtn: 'Copied!',
+      openFirebaseDomainsLink: 'Open Firebase Authorized Domains →',
     },
   },
 };
